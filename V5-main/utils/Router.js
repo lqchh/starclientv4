@@ -14,21 +14,26 @@ class Routes {
     _normalizeRoute(rawRoute) {
         if (!rawRoute) return [];
 
-        const routeArray = Array.isArray(rawRoute) ? rawRoute : Array.isArray(rawRoute.points) ? rawRoute.points : null;
+        const routeArray = Array.isArray(rawRoute) ? rawRoute : Array.isArray(rawRoute.waypoints) ? rawRoute.waypoints : Array.isArray(rawRoute.points) ? rawRoute.points : null;
         if (!routeArray) return [];
 
         const normalized = [];
         for (const point of routeArray) {
-            if (!point || typeof point.x !== 'number' || typeof point.y !== 'number' || typeof point.z !== 'number') continue;
+            let p = point;
+            if (point.pos) p = point.pos;
+
+            if (!p || typeof p.x !== 'number' || typeof p.y !== 'number' || typeof p.z !== 'number') continue;
 
             const normalizedPoint = {
-                x: Math.floor(point.x),
-                y: Math.floor(point.y),
-                z: Math.floor(point.z),
+                x: Math.floor(p.x),
+                y: Math.floor(p.y),
+                z: Math.floor(p.z),
             };
 
-            if (typeof point.movements === 'string' && point.movements.length > 0) {
-                normalizedPoint.movements = point.movements.toUpperCase();
+            if (point.type && typeof point.type === 'string') {
+                normalizedPoint.movements = point.type.toUpperCase();
+            } else if (typeof p.movements === 'string' && p.movements.length > 0) {
+                normalizedPoint.movements = p.movements.toUpperCase();
             }
 
             normalized.push(normalizedPoint);
@@ -124,7 +129,29 @@ class Routes {
         }
 
         try {
-            return Utils.writeConfigFile(fileName, this._normalizeRoute(routeData));
+            const normalizedArray = this._normalizeRoute(routeData);
+            const nameMatch = fileName.match(/([^\/]+)(?=\.json$|$)/);
+            const routeName = nameMatch ? nameMatch[1] : 'unknown';
+
+            const newFormat = {
+                type: "MiningRoute",
+                name: routeName,
+                warpCommand: null,
+                waypoints: normalizedArray.map((pt) => ({
+                    type: pt.movements ? pt.movements.charAt(0).toUpperCase() + pt.movements.slice(1).toLowerCase() : "Walk",
+                    pos: {
+                        x: pt.x,
+                        y: pt.y,
+                        z: pt.z
+                    },
+                    sneak: null,
+                    allowMovement: null,
+                    jumpAtEnd: null
+                })),
+                waypointAnchors: {}
+            };
+
+            return Utils.writeConfigFile(fileName, newFormat);
         } catch (e) {
             console.error('V5 Caught error' + e + e.stack);
             return false;
