@@ -202,10 +202,10 @@ class RouteWalkerer extends ModuleBase {
 
                     if (!this.etherwarpReady) {
                         if (point) {
-                            Rotations.rotateToVector([point[0], point[1], point[2]], 0.5, false);
+                            Rotations.rotateToVector([point[0], point[1], point[2]], true, 1.0);
 
                             Rotations.onEndRotation(() => {
-                                ScheduleTask(7, () => {
+                                ScheduleTask(2, () => {
                                     Keybind.rightClick();
                                 });
                             });

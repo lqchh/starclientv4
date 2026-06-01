@@ -182,7 +182,7 @@ class OreMacro extends ModuleBase {
 
                     Keybind.setKey('shift', dist.distance <= 1.5 && dist.distanceFlat == dist.distanceY);
 
-                    if (dist.distance <= 0.75) {
+                    if (dist.distance <= 1.25) {
                         Keybind.unpressKeys();
 
                         const nextIndex = this.getNextNavPointIndex(this.pointData.index);
@@ -229,7 +229,7 @@ class OreMacro extends ModuleBase {
                     this.dist = MathUtils.getDistanceToPlayer(this.pointData.raw.x + 0.5, this.pointData.raw.y + 1, this.pointData.raw.z + 0.5);
                     this.distance = this.dist.distance;
 
-                    if (this.distance <= 0.75) {
+                    if (this.distance <= 1.25) {
                         ChatLib.chat(this.distance);
                         this.message('&aArrived at point ' + this.pointData.index);
 
@@ -271,7 +271,7 @@ class OreMacro extends ModuleBase {
                         Rotations.rotateToVector(this.pointData.closest, 1);
                         Rotations.onEndRotation(() => {
                             if (!this.enabled) return;
-                            ScheduleTask(this.FASTAOTV ? 2 : 5, () => {
+                            ScheduleTask(this.FASTAOTV ? 0 : 2, () => {
                                 try {
                                     this.rightClickEtherWarp(this.pointData.closest);
 
@@ -293,7 +293,7 @@ class OreMacro extends ModuleBase {
 
                         if (hasMoved) {
                             ChatLib.chat(this.distance);
-                            if (this.distance <= 0.75) {
+                            if (this.distance <= 1.25) {
                                 Keybind.stopMovement();
                                 this.attemptedEtherwarp = false;
                                 this.etherwarpTicks = 0;

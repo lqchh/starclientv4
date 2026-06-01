@@ -218,7 +218,7 @@ class GemstoneMacro extends ModuleBase {
                         Rotations.rotateToVector(this.closestPoint, 1);
                         Rotations.onEndRotation(() => {
                             if (!this.enabled) return;
-                            ScheduleTask(this.FASTAOTV ? 2 : 5, () => {
+                            ScheduleTask(this.FASTAOTV ? 0 : 2, () => {
                                 this.rightClickEtherWarp(this.closestPoint);
                                 this.attemptedEtherwarp = true;
                                 this.lastX = Player.getX();
