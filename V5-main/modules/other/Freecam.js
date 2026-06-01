@@ -61,8 +61,8 @@ class Freecam extends ModuleBase {
         this.savedPerspective = mc.options.getPerspective();
         Keybind.unpressKeys();
         Mixin.set('freecamEnabled', true);
-        Mixin.delete('freecamFrozenYaw');
-        Mixin.delete('freecamFrozenPitch');
+        Mixin.set('freecamFrozenYaw', true);
+        Mixin.set('freecamFrozenPitch', true);
         Mixin.set('cameraOverrideYaw', this.freecamYaw);
         Mixin.set('cameraOverridePitch', this.freecamPitch);
         mc.options.setPerspective(Perspective.THIRD_PERSON_BACK);
@@ -113,8 +113,11 @@ class Freecam extends ModuleBase {
             const dy = currentMouseY - this.lastMouseY;
 
             if (dx !== 0 || dy !== 0) {
-                const sensitivity = (mc.options.getMouseSensitivity().getValue() || 0.5) * 0.6 + 0.2;
-                const multiplier = sensitivity * sensitivity * sensitivity * 8.0;
+                // Get player sensitivity from options
+                let sens = mc.options.getMouseSensitivity().getValue();
+                if (sens === undefined) sens = 0.5;
+                
+                const multiplier = (sens * 0.6 + 0.2) ** 3 * 8.0 * 0.15;
                 
                 this.freecamYaw += dx * multiplier;
                 this.freecamPitch += dy * multiplier;
