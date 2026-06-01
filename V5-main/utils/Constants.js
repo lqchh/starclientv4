@@ -1,0 +1,104 @@
+export const SharedConstants = net.minecraft.SharedConstants;
+export const MinecraftClient = net.minecraft.client.MinecraftClient;
+export const MCHand = net.minecraft.util.Hand;
+
+export const CLIENT_VERSION = '1.0.0';
+
+export const UMatrixStack = Java.type('gg.essential.universal.UMatrixStack').Compat.INSTANCE;
+export const ConcurrentLinkedQueue = java.util.concurrent.ConcurrentLinkedQueue;
+export const AtomicBoolean = java.util.concurrent.atomic.AtomicBoolean;
+export const StandardCharsets = java.nio.charset.StandardCharsets;
+export const BufferedInputStream = java.io.BufferedInputStream;
+export const DataFlavor = java.awt.datatransfer.DataFlavor;
+export const InputStreamReader = java.io.InputStreamReader;
+export const BufferedReader = java.io.BufferedReader;
+export const FileWriter = java.io.FileWriter;
+export const FileOutputStream = java.io.FileOutputStream;
+export const FileInputStream = java.io.FileInputStream;
+export const DataOutputStream = java.io.DataOutputStream;
+export const MessageType = java.awt.TrayIcon.MessageType;
+export const ProcessBuilder = java.lang.ProcessBuilder;
+export const TimeUnit = java.util.concurrent.TimeUnit;
+export const Files = java.nio.file.Files;
+export const StandardCopyOption = java.nio.file.StandardCopyOption;
+export const ArrayLists = java.util.ArrayList;
+export const SystemTray = java.awt.SystemTray;
+export const TrayIcon = java.awt.TrayIcon;
+export const Runtime = java.lang.Runtime;
+export const Scanner = java.util.Scanner;
+export const Toolkit = java.awt.Toolkit;
+export const GLFW = org.lwjgl.glfw.GLFW;
+export const Desktop = java.awt.Desktop;
+export const System = java.lang.System;
+export const Base64 = java.util.Base64;
+export const Color = java.awt.Color;
+export const File = java.io.File;
+export const URL = java.net.URL;
+
+export const OS = System.getProperty('os.name').toLowerCase();
+export const isWindows = OS.includes('win');
+export const isMac = OS.includes('mac');
+export const isLinux = OS.includes('nux') || OS.includes('nix');
+
+export const globalAssetsDir = new File('./config/ChatTriggers/assets');
+
+export const FFMPEG_URLS = {
+    WIN_ZIP: 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip',
+    LINUX_TAR_XZ: 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz',
+    MAC_BINARY: 'https://evermeet.cx/ffmpeg/ffmpeg-8.0.1',
+};
+
+export const BP = net.minecraft.util.math.BlockPos;
+export const Vec3d = net.minecraft.util.math.Vec3d;
+export const Direction = net.minecraft.util.math.Direction;
+export const BlockHitResult = net.minecraft.util.hit.BlockHitResult;
+export const VoxelShapes = net.minecraft.util.shape.VoxelShapes;
+export const Blocks = net.minecraft.block.Blocks;
+export const BlockStone = net.minecraft.block.BlockStone;
+export const BlockOre = net.minecraft.block.BlockOre;
+export const BlockRedstoneOre = net.minecraft.block.BlockRedstoneOre;
+export const SnowBlock = net.minecraft.block.SnowBlock;
+export const StainedGlassPaneBlock = net.minecraft.block.StainedGlassPaneBlock;
+export const ArmorStandEntity = net.minecraft.entity.decoration.ArmorStandEntity;
+export const ZombieEntity = net.minecraft.entity.mob.ZombieEntity;
+export const EndermanEntity = net.minecraft.entity.mob.EndermanEntity;
+export const BatEntity = net.minecraft.entity.passive.BatEntity;
+export const PortalParticle = net.minecraft.client.particle.PortalParticle; // pls rename to the correct name idk what it is
+
+export const MinecraftText = net.minecraft.text.Text;
+export const Formatting = net.minecraft.util.Formatting;
+export const SoundCategory = net.minecraft.sound.SoundCategory;
+export const Identifier = net.minecraft.util.Identifier;
+export const SoundEvent = net.minecraft.sound.SoundEvent;
+export const NativeImage = net.minecraft.client.texture.NativeImage;
+export const Transferable = java.awt.datatransfer.Transferable;
+export const Consumer = java.util.function.Consumer;
+export const ScreenshotRecorder = net.minecraft.client.util.ScreenshotRecorder;
+
+export const Gradient = Java.type('com.v5.render.Gradient');
+export const V5Auth = Java.type('com.v5.api.V5Auth');
+export const DiscordRPC = Java.type('com.v5.qol.DiscordRPC');
+export const KeyBindUtils = Java.type('com.v5.keybind.KeyBindUtils');
+export const XrayPackage = Java.type('com.v5.qol.Xray');
+export const GradientChat = Java.type('com.v5.gradient.Chat');
+export const PathManager = Java.type('com.v5.pathfinding.PathManager');
+export const NVG = Java.type('com.v5.render.NVGRenderer').INSTANCE;
+export const StructureFinder = Java.type('com.v5.visuals.StructureFinder');
+
+export const ImageIO = Java.type('javax.imageio.ImageIO');
+export const BufferedImage = Java.type('java.awt.image.BufferedImage');
+export const AlphaComposite = Java.type('java.awt.AlphaComposite');
+export const Matrix = UMatrixStack.get();
+export const modulesDir = new File('./config/ChatTriggers/modules');
+export const V5ConfigFile = new File(`${modulesDir}/V5Config/config.json`);
+export const Links = {
+    WEBSOCKET_URL: 'wss://backend.rdbt.top/api/chat',
+    BASE_API_URL: 'https://backend.rdbt.top',
+    PATHFINDER_API_URL: 'http://localhost:3000',
+};
+
+// export const Links = {
+//     WEBSOCKET_URL: 'ws://127.0.0.1:8787/api/chat',
+//     BASE_API_URL: 'http://127.0.0.1:8787',
+//     PATHFINDER_API_URL: 'http://localhost:3000',
+// };

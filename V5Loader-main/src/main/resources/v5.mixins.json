@@ -1,0 +1,42 @@
+{
+    "required": true,
+    "minVersion": "0.8",
+    "package": "com.v5.mixins",
+    "compatibilityLevel": "JAVA_21",
+    "client": [
+        "BlockMixin",
+        "CameraMixin",
+        "ChatHudMixin",
+        "EntityRendererMixin",
+        "HorizontalConnectingBlockMixin",
+        "KeyboardInputMixin",
+        "MinecraftClientMixin",
+        "MouseMixin",
+        "PlayerListHudMixin",
+        "RenderLayersMixin",
+        "LightTextureManagerMixin",
+        "AbstractTerrainRenderContextMixin",
+        "ChunkOcclusionDataBuilderMixin",
+        "AbstractBlockStateMixin",
+        "BlockModelRendererMixin",
+        "YggdrasilServicesKeyInfoMixin",
+        "GameOptionsAccessorMixin",
+        "TranslationMixin",
+        "ClientConnectionProxyMixin",
+        "MultiplayerScreenMixin",
+        "TitleScreenRedirectMixin",
+        "GameRendererMixin",
+        "FirmamentModAnnouncerMixin",
+        "DrawContextCapture",
+        "GlStateManagerMixin",
+        "FrustumInvoker",
+        "WorldRendererMixin",
+        "ScreenPanoramaMixin"
+    ],
+    "mixins": [
+        "ClientConnectionMixin"
+    ],
+    "injectors": {
+        "defaultRequire": 1
+    }
+}

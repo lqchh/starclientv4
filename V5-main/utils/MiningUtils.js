@@ -1,0 +1,1108 @@
+import { Chat } from './Chat';
+import { Blocks, BP } from './Constants';
+import { Flowstate } from './Flowstate';
+import { Executor } from './ThreadExecutor';
+import { Utils } from './Utils';
+import { v5Command } from './V5Commands';
+import Pathfinder from './pathfinder/PathFinder';
+import { Guis } from './player/Inventory';
+import { Keybind } from './player/Keybinding';
+import { Rotations } from './player/Rotations';
+import { TabListUtils } from './TabListUtils';
+
+const BLOCK_HARDNESS_DATA = {
+    'minecraft:polished_diorite': { hardness: 2000, name: 'Titanium' },
+    'minecraft:light_blue_wool': { hardness: 1500, name: 'Blue Mithril' },
+    'minecraft:prismarine': { hardness: 800, name: 'Prismarine Mithril' },
+    'minecraft:prismarine_bricks': { hardness: 800, name: 'Prismarine Mithril' },
+    'minecraft:dark_prismarine': { hardness: 800, name: 'Prismarine Mithril' },
+    'minecraft:cyan_terracotta': { hardness: 500, name: 'Gray Mithril' },
+    'minecraft:gray_wool': { hardness: 500, name: 'Gray Mithril' },
+    'minecraft:packed_ice': { hardness: 6000, name: 'Glacite' },
+    'minecraft:clay': { hardness: 5600, name: 'Tungsten Clay' },
+    'minecraft:infested_cobblestone': { hardness: 5600, name: 'Tungsten Cobble' },
+    'minecraft:brown_terracotta': { hardness: 5600, name: 'Umber Brown Terracotta' },
+    'minecraft:smooth_red_sandstone': { hardness: 5600, name: 'Umber Smooth Red Sandstone' },
+    'minecraft:terracotta': { hardness: 5600, name: 'Umber Terracotta' },
+    'minecraft:blue_stained_glass_pane': { hardness: 5200, name: 'Aquamarine Pane' },
+    'minecraft:brown_stained_glass_pane': { hardness: 5200, name: 'Citrine Pane' },
+    'minecraft:lime_stained_glass_pane': { hardness: 3000, name: 'Jade Pane' },
+    'minecraft:black_stained_glass_pane': { hardness: 5200, name: 'Onyx Pane' },
+    'minecraft:pink_stained_glass_pane': { hardness: 4800, name: 'Jasper Pane' },
+    'minecraft:yellow_stained_glass_pane': { hardness: 3800, name: 'Topaz Pane' },
+    'minecraft:orange_stained_glass_pane': { hardness: 3000, name: 'Amber Pane' },
+    'minecraft:purple_stained_glass_pane': { hardness: 3000, name: 'Amethyst Pane' },
+    'minecraft:green_stained_glass_pane': { hardness: 5200, name: 'Peridot Pane' },
+    'minecraft:light_blue_stained_glass_pane': { hardness: 3000, name: 'Sapphire Pane' },
+    'minecraft:red_stained_glass_pane': { hardness: 2300, name: 'Ruby Pane' },
+    'minecraft:blue_stained_glass': { hardness: 5200, name: 'Aquamarine Block' },
+    'minecraft:brown_stained_glass': { hardness: 5200, name: 'Citrine Block' },
+    'minecraft:lime_stained_glass': { hardness: 3000, name: 'Jade Block' },
+    'minecraft:black_stained_glass': { hardness: 5200, name: 'Onyx Block' },
+    'minecraft:pink_stained_glass': { hardness: 4800, name: 'Jasper Block' },
+    'minecraft:yellow_stained_glass': { hardness: 3800, name: 'Topaz Block' },
+    'minecraft:orange_stained_glass': { hardness: 3000, name: 'Amber Block' },
+    'minecraft:purple_stained_glass': { hardness: 3000, name: 'Amethyst Block' },
+    'minecraft:green_stained_glass': { hardness: 5200, name: 'Peridot Block' },
+    'minecraft:light_blue_stained_glass': { hardness: 3000, name: 'Sapphire Block' },
+    'minecraft:red_stained_glass': { hardness: 2300, name: 'Ruby Block' },
+    'minecraft:coal_block': { hardness: 600, name: 'Coal Block' },
+    'minecraft:gold_block': { hardness: 600, name: 'Gold Block' },
+    'minecraft:iron_block': { hardness: 600, name: 'Iron Block' },
+    'minecraft:redstone_block': { hardness: 600, name: 'Redstone Block' },
+    'minecraft:emerald_block': { hardness: 600, name: 'Emerald Block' },
+    'minecraft:diamond_block': { hardness: 600, name: 'Diamond Block' },
+    'minecraft:quartz_block': { hardness: 600, name: 'Quartz Block' },
+};
+
+function lookupBlock(registryName) {
+    if (!registryName) return null;
+    const data = BLOCK_HARDNESS_DATA[registryName];
+    if (!data) return null;
+    return data;
+}
+
+const TOOL_PRIORITY_LIST = [
+    { match: 'Gauntlet', priority: 5, fuel: true },
+    { match: 'Drill', priority: 5, fuel: true },
+    { match: 'Pickonimbus', priority: 3, fuel: false },
+    { match: 'Eon Pickaxe', priority: 2, fuel: false },
+    { match: 'Chrono Pickaxe', priority: 2, fuel: false },
+    { match: 'Jungle Pickaxe', priority: 2, fuel: false },
+    { match: 'Titanium Pickaxe', priority: 1, fuel: false },
+    { match: 'Mithril Pickaxe', priority: 1, fuel: false },
+];
+
+class MiningStatsCollector {
+    constructor() {
+        this.stats = Utils.getConfigFile('miningstats.json') || {};
+        this.isCollecting = false;
+        this.checkedThisSession = false;
+        this.statsFile = 'miningstats.json';
+        this.collectedData = {};
+    }
+
+    beginCollection() {
+        if (this.isCollecting) {
+            Chat.message('Already collecting stats. Wait a moment.');
+            return false;
+        }
+
+        let toolData = ToolFinder.findBest();
+        if (!toolData) {
+            Chat.message('No mining tool found!');
+            return false;
+        }
+
+        this.isCollecting = true;
+        try {
+            Guis.setItemSlot(toolData.slot);
+            Thread.sleep(500);
+
+            ChatLib.command('stats');
+            if (!this.waitForGui('Your Equipment and Stats')) return this.timeout();
+            if (!this.waitForItem('Mining Stats')) return this.timeout();
+            Thread.sleep(100);
+            this.collectedData = {};
+            this.collectedData.drill = this.getToolName(toolData);
+            this.collectedData.speed = this.extractNumericFromSlot(15, /Mining\s+Speed[:\s]*([\d,]+)/i);
+
+            ChatLib.command('hotm');
+            if (!this.waitForGui('Heart of the Mountain')) return this.timeout();
+            if (!this.waitForItem('Tier 5')) return this.timeout();
+            Thread.sleep(100);
+
+            this.collectedData.cotm = this.extractNumericFromSlot(4, /Level[:\s]*(\d+)/i);
+            this.collectedData.professional = this.extractNumericFromSlot(12, /\+(\d+(\.\d+)?)/);
+
+            let container = Player.getContainer();
+            let activeMarker = 'minecraft:emerald_block';
+            let ability = 'None';
+            if (this.checkSlotForBlock(container, 29, activeMarker)) ability = 'SpeedBoost';
+            else if (this.checkSlotForBlock(container, 33, activeMarker)) ability = 'Pickobulus';
+
+            Guis.clickSlot(8, false, 'RIGHT');
+            if (!this.waitForItem('Tier 10')) return this.timeout();
+            if (ability === 'None') {
+                container = Player.getContainer();
+                if (this.checkSlotForBlock(container, 1, activeMarker)) ability = 'GemstoneInfusion';
+                else if (this.checkSlotForBlock(container, 7, activeMarker)) ability = 'SheerForce';
+                else if (this.checkSlotForBlock(container, 37, activeMarker)) ability = 'AnomalousDesire';
+                else if (this.checkSlotForBlock(container, 43, activeMarker)) ability = 'ManiacMiner';
+            }
+            this.collectedData.ability = ability;
+
+            this.collectedData.strongarm = this.extractNumericFromSlot(21, /\+(\d+(\.\d+)?)/);
+            this.collectedData.coldres = this.extractNumericFromSlot(23, /\+(\d+(\.\d+)?)/);
+
+            let explorerLevel = this.extractNumericFromSlot(42, /\+(\d+(\.\d+)?)/);
+            this.collectedData.maxge = Number.parseInt(explorerLevel) >= 96;
+
+            Guis.closeInv();
+            this.finishCollection();
+            return true;
+        } catch (e) {
+            Chat.message('Error collecting stats: ' + e);
+            console.error('V5 Caught error' + e + e.stack);
+            return false;
+        } finally {
+            this.isCollecting = false;
+        }
+    }
+
+    waitForGui(name, timeoutMs = 4000) {
+        let waited = 0;
+        while (waited < timeoutMs) {
+            let current = Guis.guiName();
+            if (current && current.includes(name)) return true;
+            Thread.sleep(50);
+            waited += 50;
+        }
+        return false;
+    }
+
+    waitForItem(itemName, timeoutMs = 4000) {
+        let waited = 0;
+        while (waited < timeoutMs) {
+            let inventory = Player.getContainer();
+            if (Guis.findFirst(inventory, itemName) != -1) return true;
+            Thread.sleep(50);
+            waited += 50;
+        }
+        return false;
+    }
+
+    timeout() {
+        Chat.message('Failed to get mining stats.');
+        Guis.closeInv();
+        this.isCollecting = false;
+        return false;
+    }
+
+    finishCollection() {
+        let heldItem = Player.getHeldItem();
+        if (heldItem) {
+            let fullLore = heldItem.getLore().join(' ');
+            let lapMatch = fullLore.match(/lapidary\s+(i{1,3}|iv|v)/i);
+
+            if (lapMatch) {
+                let levels = { I: 1, II: 2, III: 3, IV: 4, V: 5 };
+                let levelText = lapMatch[1].toUpperCase();
+                let bonus = (levels[levelText] || 0) * 20;
+                this.collectedData.lapidary = bonus;
+            }
+        }
+
+        this.saveAndDisplay();
+    }
+
+    refreshIfNeeded() {
+        let toolData = ToolFinder.findBest();
+        if (!toolData) return;
+
+        let currentDrillName = this.getToolName(toolData);
+        let storedDrillName = this.stats?.drill || null;
+
+        if (storedDrillName !== currentDrillName) {
+            return this.beginCollection('Drill changed');
+        }
+
+        if (!this.checkedThisSession) {
+            return this.beginCollection('First check this session');
+        }
+
+        this.checkedThisSession = true;
+        return false;
+    }
+
+    saveAndDisplay() {
+        let finalStats = {
+            drill: this.collectedData.drill || this.getCurrentHeldToolName(),
+            speed: this.collectedData.speed || 0,
+            professional: this.collectedData.professional || 0,
+            lapidary: this.collectedData.lapidary || 0,
+            strongarm: this.collectedData.strongarm || 0,
+            ability: this.collectedData.ability || 'None',
+            coldres: this.collectedData.coldres || 0,
+            cotm: this.collectedData.cotm || 0,
+            maxge: this.collectedData.maxge || false,
+        };
+
+        Utils.writeConfigFile(this.statsFile, finalStats);
+        this.stats = finalStats;
+        this.checkedThisSession = true;
+
+        Chat.message('Drill: &e' + (finalStats.drill || 'Unknown'));
+        Chat.message('Speed: &6' + finalStats.speed + ' Mining Speed');
+        Chat.message('Lapidary: &6+' + finalStats.lapidary + ' Mining Speed');
+        Chat.message('Professional: &6+' + finalStats.professional + ' Mining Speed');
+        Chat.message('Strong Arm: &6+' + finalStats.strongarm + ' Mining Speed');
+        Chat.message('Ability: &e' + finalStats.ability);
+        Chat.message('Cold Resistance: &b' + finalStats.coldres);
+        Chat.message('COTM Level: &e' + finalStats.cotm);
+        Chat.message('Max Great Explorer: ' + (finalStats.maxge ? '&aYes' : '&cNo'));
+    }
+
+    extractNumericFromSlot(slot, pattern) {
+        try {
+            let container = Player.getContainer();
+            let item = container?.getStackInSlot(slot);
+            if (!item) return 0;
+
+            if (item.type?.getRegistryName?.() === 'minecraft:coal') {
+                return 0;
+            }
+
+            let lore = item.getLore();
+            for (var i = 0; i < lore.length; i++) {
+                // Chat.message(lore[i])
+                let cleanLine = ChatLib.removeFormatting(String(lore[i]));
+                let match = cleanLine.match(pattern);
+                if (match) {
+                    let value = match[1].replace(/,/g, '');
+                    return value.indexOf('.') !== -1 ? Number.parseFloat(value) : Number.parseInt(value);
+                }
+            }
+        } catch (e) {
+            console.error('V5 Caught error' + e + e.stack);
+            return 0;
+        }
+        return 0;
+    }
+
+    checkSlotForBlock(container, slot, blockId) {
+        let item = container?.getStackInSlot(slot);
+        return item && item.type?.getRegistryName() === blockId;
+    }
+
+    getToolName(toolData) {
+        let item = toolData?.item;
+        if (!item) return null;
+        return ChatLib.removeFormatting(item.getName());
+    }
+
+    getCurrentHeldToolName() {
+        let heldItem = Player.getHeldItem();
+        if (!heldItem) return null;
+        return ChatLib.removeFormatting(heldItem.getName());
+    }
+
+    getStoredStats() {
+        return this.stats;
+    }
+}
+
+const miningStatsCollector = new MiningStatsCollector();
+
+v5Command('getminingstats', () => {
+    Executor.execute(() => {
+        miningStatsCollector.beginCollection();
+    });
+});
+
+class ToolFinder {
+    static findBest() {
+        let inventory = Player.getInventory();
+        if (!inventory) return null;
+
+        let foundTools = [];
+
+        for (var slot = 0; slot <= 7; slot++) {
+            let item = inventory.getStackInSlot(slot);
+            if (!item) continue;
+
+            let itemName = ChatLib.removeFormatting(item.getName());
+            let toolInfo = this.matchTool(itemName);
+
+            if (toolInfo) {
+                let hasCheese = this.checkBlueCheese(item);
+                foundTools.push({
+                    item: item,
+                    slot: slot,
+                    priority: toolInfo.priority + (hasCheese ? 10 : 0),
+                    needsFuel: toolInfo.fuel,
+                    blueCheese: hasCheese,
+                });
+            }
+        }
+
+        if (foundTools.length === 0) return null;
+
+        foundTools.sort(function (a, b) {
+            return b.priority - a.priority;
+        });
+
+        return foundTools[0];
+    }
+
+    static matchTool(name) {
+        for (var i = 0; i < TOOL_PRIORITY_LIST.length; i++) {
+            if (name.indexOf(TOOL_PRIORITY_LIST[i].match) !== -1) {
+                return TOOL_PRIORITY_LIST[i];
+            }
+        }
+        return null;
+    }
+
+    static checkBlueCheese(item) {
+        try {
+            let lore = item.getLore();
+            for (var i = 0; i < lore.length; i++) {
+                let clean = ChatLib.removeFormatting(String(lore[i]));
+                if (clean.indexOf('Blue Cheese') !== -1) {
+                    return true;
+                }
+            }
+        } catch (e) {
+            console.error('V5 Caught error' + e + e.stack);
+            return false;
+        }
+        return false;
+    }
+}
+
+class SpeedCalculations {
+    constructor(collector) {
+        this.collector = collector;
+        this.lastCalculated = null;
+    }
+
+    getBaseSpeed(area) {
+        let stats = this.collector.getStoredStats();
+        if (!stats || !stats.speed) {
+            console.error('No stats saved!');
+            return null;
+        }
+
+        let targetArea = area || Utils.area();
+        let base = stats.speed;
+
+        if (targetArea === 'Crystal Hollows' && stats.professional) {
+            base = base + stats.professional;
+        }
+
+        let flowBonus = Flowstate.CurrentFlowstate ? Flowstate.CurrentFlowstate() : 0;
+        this.lastCalculated = base + flowBonus;
+
+        return this.lastCalculated;
+    }
+
+    getSpeedWithColdPenalty() {
+        let base = this.lastCalculated || this.getBaseSpeed();
+        if (!base) return null;
+
+        let stats = this.collector.getStoredStats();
+        let resistance = stats?.coldres || 0;
+        let currentCold = ScoreboardDebuffReader.readCold();
+
+        let penalty = Math.max(0, currentCold - resistance);
+        if (penalty === 0) return base;
+
+        let reduction = Math.min(100, penalty / 2);
+        return Math.round(base * (1 - reduction / 100));
+    }
+}
+
+class MineTimeCalculations {
+    constructor(collector) {
+        this.collector = collector;
+    }
+
+    calculateTicks(position, speed, boosted) {
+        if (!position || typeof position !== 'object') {
+            return this.clamp(100);
+        }
+
+        const x = position.x ?? (typeof position.getX === 'function' ? position.getX() : null);
+        const y = position.y ?? (typeof position.getY === 'function' ? position.getY() : null);
+        const z = position.z ?? (typeof position.getZ === 'function' ? position.getZ() : null);
+
+        if (x === null || y === null || z === null) {
+            return this.clamp(100);
+        }
+
+        let block = World.getBlockAt(x, y, z);
+        if (!block || !block.type) {
+            return this.clamp(100);
+        }
+
+        let blockName = block?.type?.getRegistryName();
+        if (!blockName) {
+            return this.clamp(100);
+        }
+        let data = BLOCK_HARDNESS_DATA[blockName];
+        let hardness = data ? data.hardness : 20000;
+
+        let effectiveSpeed = speed + (Flowstate.CurrentFlowstate ? Flowstate.CurrentFlowstate() : 0);
+
+        if (boosted) {
+            let stats = this.collector.getStoredStats();
+            let multiplier = (stats?.cotm || 0) >= 2 ? 3.5 : 3.0;
+            effectiveSpeed = effectiveSpeed * multiplier;
+        }
+
+        let rawTicks = (hardness * 30) / effectiveSpeed;
+        return this.clamp(Math.round(rawTicks));
+    }
+
+    clamp(ticks) {
+        return Math.max(4, ticks || 4);
+    }
+}
+
+const DRILL_MECHANIC_LOCATION = [-7, 144, -19];
+class RefuelService {
+    constructor() {
+        this.STATES = {
+            IDLE: 0,
+            FIND_ABIPHONE: 1,
+
+            OPEN_PLAYER_INV_SWAP: 2,
+            WAIT_PLAYER_INV_SWAP: 3,
+            SWAP_ABIPHONE_1: 4,
+            SWAP_ABIPHONE_2: 5,
+            SWAP_ABIPHONE_3: 6,
+            CLOSE_PLAYER_INV_SWAP: 7,
+
+            OPEN_ABIPHONE: 8,
+            SELECT_CONTACT: 9,
+            CLICK_CONTACT: 10,
+            WAIT_FOR_ANVIL: 11,
+            WAIT_ANVIL_READY: 12,
+            ADD_FUEL: 13,
+            CONFIRM_FUEL: 14,
+            TAKE_TOOL: 15,
+            CLOSE: 16,
+            FAIL_CLEANUP: 17,
+            WALK_TO_MECHANIC: 18,
+            ROTATE_TO_MECHANIC: 19,
+
+            OPEN_PLAYER_INV_RESTORE: 20,
+            WAIT_PLAYER_INV_RESTORE: 21,
+            RESTORE_ABIPHONE_1: 22,
+            RESTORE_ABIPHONE_2: 23,
+            RESTORE_ABIPHONE_3: 24,
+            CLOSE_PLAYER_INV_RESTORE: 25,
+        };
+
+        this.reset();
+        this.tickRegister = register('tick', () => this.tick()).unregister();
+        this.isTicking = false;
+    }
+
+    startTicking() {
+        if (this.isTicking) return;
+        this.tickRegister.register();
+        this.isTicking = true;
+    }
+
+    stopTicking() {
+        if (!this.isTicking || !this.tickRegister) return;
+        this.tickRegister.unregister();
+        this.isTicking = false;
+    }
+
+    reset() {
+        this.state = this.STATES.IDLE;
+        this.waitTicks = 0;
+        this.timeoutTicks = null;
+        this.callback = null;
+        this.contactSlot = -1;
+        this.npcRotationToken = 0;
+        this.npcRotationPending = false;
+        this.isPathing = false;
+
+        this.originalAbiphoneSlot = -1;
+        this.targetHotbarSlot = -1;
+        this.swapState = 0;
+        this.finalSuccess = false;
+        this.stopTicking();
+    }
+
+    setState(nextState, waitTicks = 0, timeoutTicks = null) {
+        this.state = nextState;
+        this.waitTicks = waitTicks;
+        this.timeoutTicks = timeoutTicks;
+    }
+
+    refuel(callback) {
+        if (this.state !== this.STATES.IDLE) {
+            Chat.message('Refuel already running!');
+            if (callback) callback(false);
+            return;
+        }
+
+        this.callback = callback;
+        this.setState(this.STATES.FIND_ABIPHONE);
+        this.startTicking();
+    }
+
+    tick() {
+        if (this.state === this.STATES.IDLE) return;
+
+        if (this.waitTicks > 0) {
+            this.waitTicks--;
+            return;
+        }
+
+        switch (this.state) {
+            case this.STATES.FIND_ABIPHONE:
+                const playerInv = Player.getInventory();
+
+                let hotbarSlot = -1;
+                for (let i = 0; i < 9; i++) {
+                    const item = playerInv.getStackInSlot(i);
+                    if (item && item.getName().includes('Abiphone')) {
+                        hotbarSlot = i;
+                        break;
+                    }
+                }
+
+                if (hotbarSlot !== -1) {
+                    Guis.setItemSlot(hotbarSlot);
+                    this.setState(this.STATES.OPEN_ABIPHONE, 5);
+                    return;
+                }
+
+                let foundSlot = -1;
+                for (let i = 9; i < 36; i++) {
+                    const item = playerInv.getStackInSlot(i);
+                    if (item && item.getName().includes('Abiphone')) {
+                        foundSlot = i;
+                        break;
+                    }
+                }
+
+                if (foundSlot !== -1) {
+                    this.originalAbiphoneSlot = foundSlot;
+
+                    let bestTool = ToolFinder.findBest();
+                    let drillSlot = bestTool ? bestTool.slot : -1;
+
+                    let targetSlot = -1;
+
+                    for (let i = 0; i < 9; i++) {
+                        if (i === drillSlot) continue;
+                        if (!playerInv.getStackInSlot(i)) {
+                            targetSlot = i;
+                            break;
+                        }
+                    }
+
+                    if (targetSlot === -1) {
+                        for (let i = 0; i < 9; i++) {
+                            if (i === drillSlot) continue;
+                            const item = playerInv.getStackInSlot(i);
+                            const name = item ? ChatLib.removeFormatting(item.getName()) : '';
+                            if (!name.includes('Volta') && !name.includes('Oil') && !name.includes('Biofuel') && !name.includes('Egg')) {
+                                targetSlot = i;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (targetSlot === -1) {
+                        for (let i = 0; i < 9; i++) {
+                            if (i !== drillSlot) {
+                                targetSlot = i;
+                                break;
+                            }
+                        }
+                    }
+
+                    this.targetHotbarSlot = targetSlot;
+                    this.setState(this.STATES.OPEN_PLAYER_INV_SWAP, 0);
+                } else {
+                    Chat.message('Abiphone not found. Walking to Drill Mechanic...');
+                    this.setState(this.STATES.WALK_TO_MECHANIC);
+                }
+                break;
+
+            case this.STATES.OPEN_PLAYER_INV_SWAP:
+                Client.getMinecraft().setScreen(new net.minecraft.client.gui.screen.ingame.InventoryScreen(Client.getMinecraft().player));
+                // someone fix this fucking shit. i forgot how to open inventory so this is bandaid
+                this.setState(this.STATES.WAIT_PLAYER_INV_SWAP, 5);
+                break;
+
+            case this.STATES.WAIT_PLAYER_INV_SWAP:
+                if (Client.isInGui()) {
+                    this.setState(this.STATES.SWAP_ABIPHONE_1, 5);
+                } else {
+                    this.setState(this.STATES.OPEN_PLAYER_INV_SWAP, 5);
+                }
+                break;
+
+            case this.STATES.SWAP_ABIPHONE_1:
+                Guis.clickSlot(this.originalAbiphoneSlot);
+                this.setState(this.STATES.SWAP_ABIPHONE_2, 5);
+                break;
+
+            case this.STATES.SWAP_ABIPHONE_2:
+                Guis.clickSlot(36 + this.targetHotbarSlot);
+                this.setState(this.STATES.SWAP_ABIPHONE_3, 5);
+                break;
+
+            case this.STATES.SWAP_ABIPHONE_3:
+                Guis.clickSlot(this.originalAbiphoneSlot);
+                this.setState(this.STATES.CLOSE_PLAYER_INV_SWAP, 5);
+                break;
+
+            case this.STATES.CLOSE_PLAYER_INV_SWAP:
+                Guis.closeInv();
+                Guis.setItemSlot(this.targetHotbarSlot);
+                this.setState(this.STATES.OPEN_ABIPHONE, 10);
+                break;
+
+            case this.STATES.OPEN_ABIPHONE:
+                Keybind.rightClick();
+                this.setState(this.STATES.SELECT_CONTACT, 0, 50);
+                break;
+
+            case this.STATES.SELECT_CONTACT:
+                if (Guis.guiName()?.indexOf('Abiphone') !== -1) {
+                    this.contactSlot = Guis.findFirst(Player.getContainer(), 'Jotraeline Greatforge');
+                    if (!Player.getContainer()?.getStackInSlot(this.contactSlot)) {
+                        if (this.handleTimeout('No jotraeline contact detected!')) return;
+                    }
+                    if (this.contactSlot === -1) return;
+                    this.setState(this.STATES.CLICK_CONTACT, 5);
+                }
+                break;
+
+            case this.STATES.CLICK_CONTACT:
+                Guis.clickSlot(this.contactSlot, false, 'LEFT');
+                this.setState(this.STATES.WAIT_FOR_ANVIL, 0, 200);
+                break;
+
+            case this.STATES.WAIT_FOR_ANVIL:
+                if (Guis.guiName() === 'Drill Anvil') {
+                    this.setState(this.STATES.WAIT_ANVIL_READY, 20);
+                    break;
+                }
+                if (this.handleTimeout('Anvil never opened?!')) return;
+                break;
+
+            case this.STATES.WAIT_ANVIL_READY:
+                let tool = ToolFinder.findBest();
+                if (!tool) return this.fail('No drill found!');
+
+                Guis.clickSlot(tool.slot + 81, true);
+                this.setState(this.STATES.ADD_FUEL, 10);
+                break;
+
+            case this.STATES.ADD_FUEL:
+                if (!Guis.clickItems(['Volta', 'Oil Barrel', 'Biofuel', 'Sunflower Oil', 'Goblin Egg'], true)) {
+                    Chat.message('No fuel detected!');
+                    this.setState(this.STATES.FAIL_CLEANUP, 10);
+                    return;
+                }
+                this.setState(this.STATES.CONFIRM_FUEL, 10);
+                break;
+
+            case this.STATES.CONFIRM_FUEL:
+                Guis.clickSlot(22, false);
+                this.setState(this.STATES.TAKE_TOOL, 10);
+                break;
+
+            case this.STATES.TAKE_TOOL:
+                Guis.clickSlot(13, true);
+                this.setState(this.STATES.CLOSE, 10);
+                break;
+
+            case this.STATES.CLOSE:
+                Guis.closeInv();
+                this.finish(true);
+                break;
+
+            case this.STATES.FAIL_CLEANUP:
+                Guis.closeInv();
+                this.finish(false);
+                break;
+
+            case this.STATES.WALK_TO_MECHANIC:
+                const dx = Player.getX() - DRILL_MECHANIC_LOCATION[0];
+                const dy = Player.getY() - DRILL_MECHANIC_LOCATION[1];
+                const dz = Player.getZ() - DRILL_MECHANIC_LOCATION[2];
+                const distSq = dx * dx + dy * dy + dz * dz;
+
+                if (distSq < 12.25) {
+                    Pathfinder.resetPath();
+                    this.isPathing = false;
+                    this.setState(this.STATES.ROTATE_TO_MECHANIC);
+                    return;
+                }
+
+                if (!this.isPathing) {
+                    this.isPathing = true;
+                    Pathfinder.findPath([DRILL_MECHANIC_LOCATION], (success) => {
+                        this.isPathing = false;
+                        if (!success) {
+                            this.fail('Failed to path to Drill Mechanic.');
+                        }
+                    });
+                }
+                break;
+
+            case this.STATES.ROTATE_TO_MECHANIC:
+                const mechanicHead = [DRILL_MECHANIC_LOCATION[0] + 0.5, DRILL_MECHANIC_LOCATION[1] + 2.2, DRILL_MECHANIC_LOCATION[2] + 0.5];
+
+                if (!this.npcRotationPending && !Rotations.isRotating) {
+                    this.npcRotationPending = true;
+                    const token = ++this.npcRotationToken;
+                    Rotations.rotateToVector(mechanicHead);
+                    Rotations.onEndRotation(() => {
+                        if (!this.npcRotationPending || this.npcRotationToken !== token) return;
+                        this.npcRotationPending = false;
+                        Keybind.rightClick();
+                        this.setState(this.STATES.WAIT_FOR_ANVIL, 10, 200);
+                    });
+                }
+                break;
+
+            case this.STATES.OPEN_PLAYER_INV_RESTORE:
+                Client.getMinecraft().setScreen(new net.minecraft.client.gui.screen.ingame.InventoryScreen(Client.getMinecraft().player));
+                this.setState(this.STATES.WAIT_PLAYER_INV_RESTORE, 5);
+                break;
+
+            case this.STATES.WAIT_PLAYER_INV_RESTORE:
+                if (Client.isInGui()) {
+                    this.setState(this.STATES.RESTORE_ABIPHONE_1, 5);
+                } else {
+                    this.setState(this.STATES.OPEN_PLAYER_INV_RESTORE, 5);
+                }
+                break;
+
+            case this.STATES.RESTORE_ABIPHONE_1:
+                Guis.clickSlot(this.originalAbiphoneSlot);
+                this.setState(this.STATES.RESTORE_ABIPHONE_2, 5);
+                break;
+
+            case this.STATES.RESTORE_ABIPHONE_2:
+                Guis.clickSlot(36 + this.targetHotbarSlot);
+                this.setState(this.STATES.RESTORE_ABIPHONE_3, 5);
+                break;
+
+            case this.STATES.RESTORE_ABIPHONE_3:
+                Guis.clickSlot(this.originalAbiphoneSlot);
+                this.setState(this.STATES.CLOSE_PLAYER_INV_RESTORE, 5);
+                break;
+
+            case this.STATES.CLOSE_PLAYER_INV_RESTORE:
+                Guis.closeInv();
+                this.finalCallback(this.finalSuccess);
+                break;
+        }
+    }
+
+    handleTimeout(message) {
+        this.timeoutTicks--;
+        if (this.timeoutTicks <= 0) {
+            this.fail(message);
+            return true;
+        }
+        return false;
+    }
+
+    fail(message) {
+        if (message) Chat.message(message);
+        this.finish(false);
+    }
+
+    finish(success) {
+        if (this.originalAbiphoneSlot !== -1) {
+            this.finalSuccess = success;
+            this.setState(this.STATES.OPEN_PLAYER_INV_RESTORE, 10);
+        } else {
+            this.finalCallback(success);
+        }
+    }
+
+    finalCallback(success) {
+        const cb = this.callback;
+        this.reset();
+        if (cb) cb(success);
+    }
+}
+
+class ExplorerUpgrade {
+    constructor(collector) {
+        this.collector = collector;
+    }
+
+    upgrade(callback) {
+        let self = this;
+
+        const t = new java.lang.Thread(function () {
+            let stats = self.collector.getStoredStats();
+
+            if (stats?.maxge) {
+                Chat.message('Great Explorer already maxed!');
+                return callback(true);
+            }
+
+            if (stats?.maxge === undefined) {
+                Chat.message('Run /getminingstats first!');
+                return callback(false);
+            }
+
+            let chatWatcher = register('chat', function (event) {
+                let msg = event.message.getString();
+
+                if (msg.indexOf('You must first unlock') !== -1) {
+                    Thread.sleep(300);
+                    Chat.message("great explorer can't be unlocked!");
+                    Guis.closeInv();
+                    chatWatcher.unregister();
+                    return callback(false);
+                }
+
+                if (msg.indexOf("You don't have enough Gemstone Powder!") !== -1) {
+                    Thread.sleep(300);
+                    Chat.message('insufficient powder!');
+                    Guis.closeInv();
+                    chatWatcher.unregister();
+                    return callback(false);
+                }
+            });
+
+            ChatLib.command('hotm');
+            Thread.sleep(1000);
+
+            if (Guis.guiName() !== 'Heart of the Mountain') {
+                Chat.message('HOTM failed to open!');
+                chatWatcher.unregister();
+                return callback(false);
+            }
+
+            Guis.clickSlot(8, false, 'RIGHT');
+            Thread.sleep(1000);
+
+            while (Guis.guiName() === 'Heart of the Mountain') {
+                Thread.sleep(500);
+
+                let slot = Player.getContainer()?.getStackInSlot(42);
+                if (!slot) continue;
+
+                let nbtString = slot.getNBT().toString();
+
+                if (nbtString.indexOf('item.minecraft.coal') !== -1) {
+                    Guis.clickSlot(42, false);
+                } else if (nbtString.indexOf('item.minecraft.emerald') !== -1) {
+                    Guis.clickSlot(42, true);
+                } else {
+                    break;
+                }
+            }
+
+            chatWatcher.unregister();
+            callback(true);
+        });
+        t.setDaemon(true);
+        t.start();
+    }
+}
+
+class ScoreboardDebuffReader {
+    static readCold() {
+        return this.readDebuff('❄');
+    }
+
+    static readHeat() {
+        return this.readDebuff('♨');
+    }
+
+    static readDebuff(symbol) {
+        let lines = Scoreboard.getLines();
+
+        for (var i = 0; i < lines.length; i++) {
+            let lineText = String(lines[i]);
+            if (lineText.indexOf(symbol) !== -1) {
+                let clean = ChatLib.removeFormatting(lineText);
+                let pattern = new RegExp('(\\d+(?:\\.\\d+)?)\\s*' + symbol);
+                let match = clean.match(pattern);
+
+                if (match) {
+                    return Number.parseFloat(match[1]);
+                }
+            }
+        }
+
+        return 0;
+    }
+}
+
+class CommissionParser {
+    static parse() {
+        return this.parseTab();
+    }
+
+    static parseTab() {
+        return TabListUtils.readCommissions();
+    }
+
+    static parseGui(container, isKnownCommission) {
+        try {
+            if (!container) return [];
+
+            let commissions = [];
+            for (let i = 9; i < 17; i++) {
+                const stack = container.getStackInSlot(i);
+                if (!stack) continue;
+
+                const parsed = this.parseGuiCommissionStack(stack, isKnownCommission);
+                if (!parsed) continue;
+                commissions.push(parsed);
+            }
+
+            return commissions;
+        } catch (e) {
+            console.error('V5 Caught error' + e + e.stack);
+            return [];
+        }
+    }
+
+    static parseGuiCommissionStack(stack, isKnownCommission) {
+        const name = ChatLib.removeFormatting(stack.getName());
+        if (!name.startsWith('Commission #')) return null;
+
+        const lore = stack.getLore();
+        if (!lore || lore.length === 0) return null;
+
+        let realName = null;
+
+        for (let i = 0; i < lore.length; i++) {
+            const clean = ChatLib.removeFormatting(String(lore[i])).trim();
+            if (!clean) continue;
+
+            if (typeof isKnownCommission === 'function') {
+                if (isKnownCommission(clean)) {
+                    realName = clean;
+                    break;
+                }
+            }
+        }
+
+        if (!realName && lore.length > 4) {
+            const potentialName = ChatLib.removeFormatting(String(lore[4])).trim();
+            if (potentialName.length > 0 && potentialName !== 'Rewards' && potentialName !== 'Progress') {
+                realName = potentialName;
+            }
+        }
+
+        if (!realName) return null;
+
+        let progress = 0;
+
+        if (lore.some((line) => String(line).indexOf('COMPLETED') !== -1)) {
+            progress = 1;
+        } else {
+            for (let i = 0; i < lore.length; i++) {
+                const clean = ChatLib.removeFormatting(String(lore[i])).trim();
+                if (!clean.endsWith('%')) continue;
+                const match = clean.match(/([\d.]+)%$/);
+                if (!match) continue;
+                progress = Number.parseFloat(match[1]) / 100;
+                break;
+            }
+        }
+
+        return { name: realName, progress: progress };
+    }
+}
+
+class BlockUtils {
+    static setToAir(pos) {
+        if (!pos) return;
+        try {
+            const x = pos.x ?? (typeof pos.getX === 'function' ? pos.getX() : null);
+            const y = pos.y ?? (typeof pos.getY === 'function' ? pos.getY() : null);
+            const z = pos.z ?? (typeof pos.getZ === 'function' ? pos.getZ() : null);
+
+            if (x === null || y === null || z === null) return;
+
+            let blockPos = new BP(x, y, z);
+            Client.getMinecraft().world.setBlockState(blockPos, Blocks.AIR.getDefaultState());
+        } catch (e) {
+            Chat.message('error setting ghost block');
+            console.error('V5 Caught error' + e + e.stack);
+        }
+    }
+}
+
+const speedCalc = new SpeedCalculations(miningStatsCollector);
+const timeCalc = new MineTimeCalculations(miningStatsCollector);
+const refueler = new RefuelService();
+const explorer = new ExplorerUpgrade(miningStatsCollector);
+
+v5Command('refueldrill', () => {
+    refueler.refuel((success) => {
+        if (success) {
+            Chat.message('Refueling completed');
+        } else {
+            Chat.message('Refueling failed');
+        }
+    });
+});
+
+export const MiningUtils = {
+    getMiningSpeed: function (area) {
+        return speedCalc.getBaseSpeed(area);
+    },
+    getSpeedWithCold: function () {
+        return speedCalc.getSpeedWithColdPenalty();
+    },
+    getMineTime: function (pos, speed, boost) {
+        return timeCalc.calculateTicks(pos, speed, boost);
+    },
+    getBlockInfo: function (registryName) {
+        return lookupBlock(registryName);
+    },
+    refreshMiningStatsIfNeeded: function (callback = null) {
+        Executor.execute(() => {
+            let refreshed = false;
+            refreshed = miningStatsCollector.refreshIfNeeded();
+            if (callback) Client.scheduleTask(0, () => callback(refreshed));
+        });
+    },
+    getDrills: function () {
+        let bestTool = ToolFinder.findBest();
+        if (!bestTool) {
+            return { blueCheese: null, drill: null };
+        }
+        return {
+            blueCheese: bestTool.blueCheese ? bestTool : null,
+            drill: bestTool,
+        };
+    },
+    doRefueling: function (isComm, callback) {
+        refueler.refuel(callback);
+    },
+    MaxGreatExplorer: function (callback) {
+        explorer.upgrade(callback);
+    },
+    inCamp: function () {
+        return Player.getZ() > 185 && Utils.area() === 'Dwarven Mines';
+    },
+    getDebuff: function (type) {
+        return type.toLowerCase() === 'cold' ? ScoreboardDebuffReader.readCold() : ScoreboardDebuffReader.readHeat();
+    },
+    GhostBlock: function (pos) {
+        BlockUtils.setToAir(pos);
+    },
+    readCommissions: function () {
+        return CommissionParser.parseTab();
+    },
+    readCommissionsFromGui: function (container, isKnownCommission) {
+        return CommissionParser.parseGui(container, isKnownCommission);
+    },
+};
+
+v5Command('maxge', () => {
+    MiningUtils.MaxGreatExplorer((success) => {
+        if (success) {
+            Chat.message('Great Explorer upgrade completed');
+        } else {
+            Chat.message('Great Explorer upgrade failed');
+        }
+    });
+});

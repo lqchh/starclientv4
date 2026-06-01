@@ -1,0 +1,14 @@
+.gradle/
+build/
+out/
+target/
+
+*.class
+*.jar
+*.war
+*.ear
+
+node_modules/
+
+.DS_Store
+Thumbs.db

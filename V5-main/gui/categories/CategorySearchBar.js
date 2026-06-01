@@ -1,0 +1,348 @@
+import { DataFlavor, NVG, Toolkit, globalAssetsDir } from '../../utils/Constants';
+import {
+    colorWithAlpha,
+    drawImage,
+    drawRect,
+    drawRoundedRectangle,
+    drawRoundedRectangleWithBorder,
+    drawText,
+    FontSizes,
+    getTextWidth,
+    isInside,
+    PADDING,
+    playClickSound,
+    THEME,
+    TypingState,
+} from '../Utils';
+
+const ASSETS_PATHS = [globalAssetsDir.getPath() + '/'];
+
+const getAssetPath = (filename) => {
+    for (const basePath of ASSETS_PATHS) {
+        const fullPath = basePath + filename;
+        if (new java.io.File(fullPath).exists()) {
+            return fullPath;
+        }
+    }
+    return ASSETS_PATHS[0] + filename;
+};
+
+const SEARCH_ICON = getAssetPath('search.svg');
+
+register('guiKey', (char, keyCode, gui, event) => {
+    if (SearchBar.isFocused) {
+        if (SearchBar.handleKeyType(char, keyCode)) {
+            cancel(event);
+        }
+    }
+});
+
+export const SearchBar = {
+    isExpanded: false,
+    animation: 0,
+    animatedWidth: 30,
+    query: '',
+    isFocused: false,
+    cursorIndex: 0,
+    collapsedWidth: 30,
+    expandedWidth: 220,
+    typingExpandedWidth: 560,
+    height: 28,
+    lerpSpeed: 0.15,
+    textX: 0,
+    lastPanelWidth: 0,
+    hoverBlockRect: null,
+    hoverProgress: 0,
+    hoverLastUpdate: Date.now(),
+
+    getPanelAvailableWidth(panel) {
+        if (!panel) return this.typingExpandedWidth;
+        this.lastPanelWidth = panel.width;
+        return Math.max(this.collapsedWidth, panel.width - PADDING * 2);
+    },
+
+    getIdleExpandedWidth(panel) {
+        const available = this.getPanelAvailableWidth(panel);
+        return Math.min(Math.max(this.collapsedWidth, this.expandedWidth), available);
+    },
+
+    getTypingExpandedWidth(panel) {
+        const available = this.getPanelAvailableWidth(panel);
+        return Math.min(Math.max(this.getIdleExpandedWidth(panel), this.typingExpandedWidth), available);
+    },
+
+    getTargetWidth(panel) {
+        if (!this.isExpanded) return this.collapsedWidth;
+        const hasText = this.query.trim().length > 0;
+        return hasText ? this.getTypingExpandedWidth(panel) : this.getIdleExpandedWidth(panel);
+    },
+
+    draw(mouseX, mouseY, panel, y) {
+        if (!panel) return;
+
+        if (!this.isFocused && this.isExpanded && this.animation > 0.9 && this.query === '') {
+            this.isExpanded = false;
+        }
+
+        const targetWidth = this.getTargetWidth(panel);
+        this.animatedWidth += (targetWidth - this.animatedWidth) * this.lerpSpeed;
+        const currentWidth = this.animatedWidth;
+        const span = Math.max(1, this.getTypingExpandedWidth(panel) - this.collapsedWidth);
+        this.animation = Math.max(0, Math.min(1, (currentWidth - this.collapsedWidth) / span));
+        const x = panel.x + panel.width - PADDING - currentWidth;
+
+        const barRect = { x, y, width: currentWidth, height: this.height };
+        const hovered = isInside(mouseX, mouseY, barRect);
+        this.hoverBlockRect = barRect;
+
+        const now = Date.now();
+        const delta = (now - this.hoverLastUpdate) / 150;
+        this.hoverLastUpdate = now;
+
+        if (hovered) this.hoverProgress = Math.min(1, this.hoverProgress + delta);
+        else this.hoverProgress = Math.max(0, this.hoverProgress - delta);
+
+        const baseColor = this.isFocused ? THEME.BG_INSET : THEME.BG_COMPONENT;
+        const borderColor = THEME.BORDER;
+
+        drawRoundedRectangleWithBorder({
+            x: x,
+            y: y,
+            width: currentWidth,
+            height: this.height,
+            radius: 8,
+            color: baseColor,
+            borderWidth: 1,
+            borderColor: borderColor,
+        });
+
+        if (!this.isFocused && this.hoverProgress > 0) {
+            drawRoundedRectangle({
+                x: x,
+                y: y,
+                width: currentWidth,
+                height: this.height,
+                radius: 8,
+                color: colorWithAlpha(THEME.BG_INSET, this.hoverProgress),
+            });
+        }
+
+        const barRightEdge = panel.x + panel.width - PADDING;
+        const iconX = barRightEdge - this.collapsedWidth / 2 - 8;
+        const iconY = y + (this.height - 16) / 2;
+
+        drawImage(SEARCH_ICON, iconX, iconY, 16, 16);
+
+        const fontSize = FontSizes.REGULAR;
+        this.textX = x + 10;
+        const textY = y + this.height / 2;
+        const visibleTextWidth = Math.max(0, currentWidth - 35);
+
+        if (visibleTextWidth > 0) {
+            NVG.save();
+            NVG.scissor(this.textX, y, visibleTextWidth, this.height);
+
+            if (this.query === '') {
+                drawText('Search...', this.textX, textY, fontSize, THEME.TEXT_MUTED);
+            } else {
+                drawText(this.query, this.textX, textY, fontSize, THEME.TEXT);
+            }
+
+            if (this.isFocused && Date.now() % 1000 < 500) {
+                const cursorOffset = getTextWidth(this.query.substring(0, this.cursorIndex), fontSize);
+                const finalCursorX = this.textX + cursorOffset;
+
+                drawRect({
+                    x: finalCursorX,
+                    y: textY - 4,
+                    width: 1,
+                    height: 9,
+                    color: THEME.TEXT_DIM,
+                });
+            }
+
+            NVG.restore();
+        }
+    },
+
+    handleClick(mouseX, mouseY, panel, y) {
+        if (!panel) return false;
+
+        const barRightEdge = panel.x + panel.width - PADDING;
+        const iconX = barRightEdge - this.collapsedWidth;
+
+        const iconRect = {
+            x: iconX,
+            y: y,
+            width: this.collapsedWidth,
+            height: this.height,
+        };
+
+        if (isInside(mouseX, mouseY, iconRect)) {
+            this.isExpanded = !this.isExpanded;
+            this.isFocused = this.isExpanded;
+            TypingState.isTyping = this.isFocused;
+
+            if (this.isFocused) {
+                this.cursorIndex = this.query.length;
+            }
+
+            playClickSound();
+            return true;
+        }
+
+        if (this.isExpanded) {
+            const currentWidth = this.animatedWidth;
+            const barX = barRightEdge - currentWidth;
+            const barRect = { x: barX, y, width: currentWidth, height: this.height };
+
+            if (isInside(mouseX, mouseY, barRect)) {
+                if (!this.isFocused) {
+                    this.isFocused = true;
+                    TypingState.isTyping = true;
+                    playClickSound();
+                }
+                this.cursorIndex = this.getCursorIndexFromMouseX(mouseX);
+                return true;
+            }
+        }
+
+        if (this.isFocused || this.isExpanded) {
+            this.isExpanded = false;
+            this.isFocused = false;
+            TypingState.isTyping = false;
+        }
+
+        return false;
+    },
+
+    handleKeyType(char, keyCode) {
+        if (!this.isFocused) return false;
+
+        const BACKSPACE = 259;
+        const ESCAPE = 256;
+        const ENTER = 257;
+        const LEFT_ARROW = 263;
+        const RIGHT_ARROW = 262;
+        const SPACE = 32;
+        const KEY_V = 86;
+
+        if (keyCode === ESCAPE || keyCode === ENTER) {
+            this.isExpanded = false;
+            this.isFocused = false;
+            TypingState.isTyping = false;
+            playClickSound();
+            return true;
+        }
+
+        if (keyCode === LEFT_ARROW) {
+            if (this.cursorIndex > 0) this.cursorIndex--;
+            return true;
+        }
+        if (keyCode === RIGHT_ARROW) {
+            if (this.cursorIndex < this.query.length) this.cursorIndex++;
+            return true;
+        }
+
+        if (keyCode === BACKSPACE) {
+            if (this.cursorIndex > 0) {
+                this.query = this.query.slice(0, this.cursorIndex - 1) + this.query.slice(this.cursorIndex);
+                this.cursorIndex--;
+            }
+            return true;
+        }
+
+        const ctrlDown = Keyboard.isKeyDown(Keyboard.KEY_LCONTROL) || Keyboard.isKeyDown(Keyboard.KEY_RCONTROL);
+        if (ctrlDown && keyCode === KEY_V) {
+            try {
+                const clipboard = Toolkit.getDefaultToolkit().getSystemClipboard().getData(DataFlavor.stringFlavor);
+                if (clipboard !== null && clipboard !== undefined) {
+                    const pasted = String(clipboard).replace(/[\r\n]+/g, ' ');
+                    if (pasted.length > 0) {
+                        this.insertText(pasted);
+                    }
+                }
+            } catch (e) {
+                console.error('V5 Caught error' + e + e.stack);
+            }
+            return true;
+        }
+
+        if (keyCode === SPACE) {
+            this.insertText(' ');
+            return true;
+        }
+
+        const charStr = char?.toString();
+        if (charStr && charStr.length === 1) {
+            const code = charStr.codePointAt(0);
+            if (code >= 33 && code <= 126) {
+                let finalChar = charStr;
+                if (code >= 97 && code <= 122) {
+                    const shiftHeld = Keyboard.isKeyDown(Keyboard.KEY_LSHIFT) || Keyboard.isKeyDown(Keyboard.KEY_RSHIFT);
+                    if (shiftHeld) {
+                        finalChar = charStr.toUpperCase();
+                    }
+                }
+                this.insertText(finalChar);
+                return true;
+            }
+        }
+
+        return false;
+    },
+
+    insertText(text) {
+        if (!text) return false;
+        const maxTextWidth = this.getTypingExpandedWidth({ width: this.lastPanelWidth || this.typingExpandedWidth }) - 35;
+        let accepted = '';
+
+        for (const char of text) {
+            const candidate = this.query.slice(0, this.cursorIndex) + accepted + char + this.query.slice(this.cursorIndex);
+            if (getTextWidth(candidate, FontSizes.REGULAR) > maxTextWidth) break;
+            accepted += char;
+        }
+
+        if (accepted.length === 0) return false;
+        this.query = this.query.slice(0, this.cursorIndex) + accepted + this.query.slice(this.cursorIndex);
+        this.cursorIndex += accepted.length;
+        return true;
+    },
+
+    updateHoverBlock(panel, y) {
+        if (!panel) return;
+        const currentWidth = this.animatedWidth;
+        const x = panel.x + panel.width - PADDING - currentWidth;
+        this.hoverBlockRect = { x, y, width: currentWidth, height: this.height };
+    },
+
+    isHoverBlocked(mouseX, mouseY) {
+        if (!this.hoverBlockRect) return false;
+        return isInside(mouseX, mouseY, this.hoverBlockRect);
+    },
+
+    getCursorIndexFromMouseX(mouseX) {
+        if (!this.query) return 0;
+        const relativeX = mouseX - this.textX;
+        let prevWidth = 0;
+        for (let i = 0; i < this.query.length; i++) {
+            const charWidth = getTextWidth(this.query[i], FontSizes.REGULAR);
+            if (relativeX <= prevWidth + charWidth / 2) return i;
+            prevWidth += charWidth;
+        }
+        return this.query.length;
+    },
+
+    resetSearch() {
+        this.isExpanded = false;
+        this.isFocused = false;
+        TypingState.isTyping = false;
+        this.animatedWidth = this.collapsedWidth;
+        this.cursorIndex = 0;
+        this.query = '';
+    },
+
+    getSearchQuery() {
+        return this.query.toLowerCase().trim();
+    },
+};

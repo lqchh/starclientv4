@@ -1,0 +1,9 @@
+[submodule ".devonian-src"]
+	path = .devonian-src
+	url = https://github.com/Synnerz/devonian.git
+	branch = 1.21.11
+
+[submodule ".skyblocker-src"]
+	path = .skyblocker-src
+	url = https://github.com/SkyblockerMod/Skyblocker.git
+	branch = main
