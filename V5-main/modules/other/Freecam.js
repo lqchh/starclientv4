@@ -24,6 +24,10 @@ class Freecam extends ModuleBase {
 
         this.moveSpeed = 10;
         this.cameraPos = null;
+        this.freecamYaw = 0;
+        this.freecamPitch = 0;
+        this.lastMouseX = null;
+        this.lastMouseY = null;
         this.velocity = new Vec3d(0, 0, 0);
         this.savedPerspective = null;
 
@@ -48,15 +52,19 @@ class Freecam extends ModuleBase {
         }
 
         this.message('&aEnabled');
-        this.cameraPos = this.getInitialCameraPos(player, player.getYaw(), player.getPitch());
+        this.freecamYaw = player.getYaw();
+        this.freecamPitch = player.getPitch();
+        this.lastMouseX = Client.getMouseX();
+        this.lastMouseY = Client.getMouseY();
+        this.cameraPos = this.getInitialCameraPos(player, this.freecamYaw, this.freecamPitch);
         this.velocity = new Vec3d(0, 0, 0);
         this.savedPerspective = mc.options.getPerspective();
         Keybind.unpressKeys();
         Mixin.set('freecamEnabled', true);
         Mixin.delete('freecamFrozenYaw');
         Mixin.delete('freecamFrozenPitch');
-        Mixin.delete('cameraOverrideYaw');
-        Mixin.delete('cameraOverridePitch');
+        Mixin.set('cameraOverrideYaw', this.freecamYaw);
+        Mixin.set('cameraOverridePitch', this.freecamPitch);
         mc.options.setPerspective(Perspective.THIRD_PERSON_BACK);
         Camera.setCameraPosition(this.cameraPos);
     }
@@ -81,22 +89,51 @@ class Freecam extends ModuleBase {
     }
 
     onTick() {
-        if (!this.enabled || !World.isLoaded() || Client.isInGui()) return;
+        if (!this.enabled || !World.isLoaded() || Client.isInGui()) {
+            this.lastMouseX = Client.getMouseX();
+            this.lastMouseY = Client.getMouseY();
+            return;
+        }
 
         const player = Player.getPlayer();
         if (!player) return;
 
         if (!this.cameraPos) {
-            this.cameraPos = this.getInitialCameraPos(player, player.getYaw(), player.getPitch());
+            this.freecamYaw = player.getYaw();
+            this.freecamPitch = player.getPitch();
+            this.cameraPos = this.getInitialCameraPos(player, this.freecamYaw, this.freecamPitch);
         }
+
+        // Handle independent rotation via mouse delta
+        const currentMouseX = Client.getMouseX();
+        const currentMouseY = Client.getMouseY();
+
+        if (this.lastMouseX !== null && this.lastMouseY !== null) {
+            const dx = currentMouseX - this.lastMouseX;
+            const dy = currentMouseY - this.lastMouseY;
+
+            if (dx !== 0 || dy !== 0) {
+                const sensitivity = (mc.options.getMouseSensitivity().getValue() || 0.5) * 0.6 + 0.2;
+                const multiplier = sensitivity * sensitivity * sensitivity * 8.0;
+                
+                this.freecamYaw += dx * multiplier;
+                this.freecamPitch += dy * multiplier;
+                this.freecamPitch = Math.max(-90, Math.min(90, this.freecamPitch));
+
+                Mixin.set('cameraOverrideYaw', this.freecamYaw);
+                Mixin.set('cameraOverridePitch', this.freecamPitch);
+            }
+        }
+        this.lastMouseX = currentMouseX;
+        this.lastMouseY = currentMouseY;
 
         if (mc.options.getPerspective() !== Perspective.THIRD_PERSON_BACK) {
             mc.options.setPerspective(Perspective.THIRD_PERSON_BACK);
         }
 
         const options = mc.options;
-        const yawRad = (player.getYaw() * Math.PI) / 180;
-        const pitchRad = (player.getPitch() * Math.PI) / 180;
+        const yawRad = (this.freecamYaw * Math.PI) / 180;
+        const pitchRad = (this.freecamPitch * Math.PI) / 180;
 
         let moveX = 0;
         let moveY = 0;
