@@ -13,35 +13,55 @@ function Write-UpdateLog {
     Add-Content -Path $LogFile -Value "[$timestamp] $Message"
 }
 
+function Invoke-Git {
+    param(
+        [string[]] $Arguments,
+        [switch] $DiscardOutput
+    )
+
+    if ($DiscardOutput) {
+        $output = & git @Arguments 2>$null
+    }
+    else {
+        $output = & git @Arguments 2>$null
+    }
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "git $($Arguments -join ' ') failed with exit code $LASTEXITCODE."
+    }
+
+    return $output
+}
+
 try {
     Set-Location $RepoRoot
 
-    $branch = (& git rev-parse --abbrev-ref HEAD).Trim()
+    $branch = (Invoke-Git @("rev-parse", "--abbrev-ref", "HEAD")).Trim()
     if ($branch -ne "main") {
         Write-UpdateLog "Skipped: current branch is '$branch', expected 'main'."
         exit 0
     }
 
-    & git fetch --prune origin main *> $null
+    Invoke-Git @("fetch", "--prune", "origin", "main") -DiscardOutput | Out-Null
 
-    $local = (& git rev-parse HEAD).Trim()
-    $remote = (& git rev-parse origin/main).Trim()
+    $local = (Invoke-Git @("rev-parse", "HEAD")).Trim()
+    $remote = (Invoke-Git @("rev-parse", "origin/main")).Trim()
 
     if ($local -eq $remote) {
         Write-UpdateLog "Already up to date at $local."
         exit 0
     }
 
-    $status = (& git status --porcelain)
+    $status = Invoke-Git @("status", "--porcelain")
     if ($status) {
         Write-UpdateLog "Skipped: local changes exist. Commit, stash, or discard them before auto-update can pull."
         exit 0
     }
 
-    & git pull --ff-only --recurse-submodules origin main *> $null
-    & git submodule update --init --recursive *> $null
+    Invoke-Git @("pull", "--ff-only", "--recurse-submodules", "origin", "main") -DiscardOutput | Out-Null
+    Invoke-Git @("submodule", "update", "--init", "--recursive") -DiscardOutput | Out-Null
 
-    $updated = (& git rev-parse HEAD).Trim()
+    $updated = (Invoke-Git @("rev-parse", "HEAD")).Trim()
     Write-UpdateLog "Updated from $local to $updated."
 }
 catch {
