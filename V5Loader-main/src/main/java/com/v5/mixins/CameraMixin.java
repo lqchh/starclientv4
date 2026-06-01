@@ -16,6 +16,9 @@ public abstract class CameraMixin {
     @Shadow
     protected abstract void setPos(Vec3d pos);
 
+    @Shadow
+    protected abstract void setRotation(float yaw, float pitch);
+
     @Inject(method = "update", at = @At("TAIL"))
     private void v5$applyCameraOverride(
             BlockView area,
@@ -27,6 +30,13 @@ public abstract class CameraMixin {
         Object override = V5MixinStorage.get("cameraOverridePos", null);
         if (override instanceof Vec3d pos) {
             this.setPos(pos);
+        }
+
+        Object overrideYaw = V5MixinStorage.get("cameraOverrideYaw", null);
+        Object overridePitch = V5MixinStorage.get("cameraOverridePitch", null);
+
+        if (overrideYaw instanceof Number && overridePitch instanceof Number) {
+            this.setRotation(((Number) overrideYaw).floatValue(), ((Number) overridePitch).floatValue());
         }
     }
 }
