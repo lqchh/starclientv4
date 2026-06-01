@@ -28,9 +28,9 @@ class ClippingManager extends ModuleBase {
         this.process = null;
         this.isDownloading = false;
         this.isRecording = false;
-        this.fps = 15;
-        this.segmentCount = 6;
-        this.compressClips = false;
+        this.fps = 30;
+        this.segmentCount = 3;
+        this.compressClips = true;
 
         this.lastW = 0;
         this.lastH = 0;
@@ -55,8 +55,8 @@ class ClippingManager extends ModuleBase {
         this.addDirectSlider(
             'FPS',
             15,
+            60,
             30,
-            15,
             (v) => {
                 const newFps = Math.floor(v);
                 if (this.fps !== newFps) {
@@ -73,9 +73,9 @@ class ClippingManager extends ModuleBase {
 
         this.addDirectSlider(
             'Segment Count',
-            6,
-            30,
-            12,
+            1,
+            20,
+            3,
             (v) => {
                 this.segmentCount = Math.floor(v);
                 this.cleanupBuffer();
@@ -89,8 +89,8 @@ class ClippingManager extends ModuleBase {
             (v) => {
                 this.compressClips = v;
             },
-            'Automatically compresses clips to reduce file size.',
-            false,
+            'Automatically compresses clips to fit Discord (8MB).',
+            true,
             'Clipping'
         );
 
@@ -203,14 +203,16 @@ class ClippingManager extends ModuleBase {
                     ffmpegFile.getAbsolutePath(),
                     '-y',
                     '-i', inputClip.getAbsolutePath(),
-                    '-c:v', 'libx265',
-                    '-crf', '28',
-                    '-preset', 'ultrafast',
-                    '-vf', 'scale=-2:1080',
+                    '-c:v', 'libx264',
+                    '-preset', 'faster',
+                    '-b:v', '3500k',
+                    '-maxrate', '4000k',
+                    '-bufsize', '8000k',
+                    '-vf', 'scale=-2:720',
                     '-c:a', 'aac',
                     '-b:a', '128k',
                     outputFile.getAbsolutePath(),
-                ]; // updated to have audio (no clue if work)
+                ];
 
                 const pb = new ProcessBuilder(...args);
                 pb.redirectErrorStream(true);
@@ -238,7 +240,8 @@ class ClippingManager extends ModuleBase {
                         console.error('V5 Caught error' + e + e.stack);
                     }
                 } else {
-                    Chat.messageClip(`&aSuccessfully compressed: &b${outputFile.getName()}`);
+                    Chat.messageClip(`&aSuccessfully compressed for Discord: &b${outputFile.getName()}`);
+                    try { inputClip.delete(); } catch(e) {}
                 }
             } catch (e) {
                 Chat.messageClip(`&cCompression failed: ${e}`);
@@ -475,7 +478,7 @@ class ClippingManager extends ModuleBase {
             '-preset',
             'ultrafast',
             '-crf',
-            '25',
+            '20',
             '-g',
             String(gopSize),
             '-sc_threshold',
