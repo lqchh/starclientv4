@@ -1,4 +1,4 @@
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "Continue"
 
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 $LogDir = Join-Path $env:LOCALAPPDATA "starclientv4-auto-update"
