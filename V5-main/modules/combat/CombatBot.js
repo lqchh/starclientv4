@@ -601,7 +601,37 @@ class Combat extends ModuleBase {
         this.setState(COMBAT_STATE.ATTACKING);
     }
 
+    assessTerrainComplexity() {
+        const player = Player.getPlayer();
+        if (!player) return 0;
+
+        const x = Math.floor(player.getX());
+        const y = Math.floor(player.getY());
+        const z = Math.floor(player.getZ());
+        const world = World.getWorld();
+
+        let complexity = 0;
+        try {
+            for (let dx = -3; dx <= 3; dx++) {
+                for (let dz = -3; dz <= 3; dz++) {
+                    for (let dy = -2; dy <= 2; dy++) {
+                        const pos = new BP(x + dx, y + dy, z + dz);
+                        const state = world.getBlockState(pos);
+                        if (state && !state.getCollisionShape(world, pos).isEmpty()) {
+                            complexity++;
+                        }
+                    }
+                }
+            }
+        } catch (e) {}
+
+        return Math.min(1, complexity / 50);
+    }
+
     handlePathingState(pos, distanceData) {
+        const terrainComplexity = this.assessTerrainComplexity();
+        const dynamicThreshold = this.pathfindingThreshold * (1 + terrainComplexity * 0.3);
+
         if (this.lastPathTarget) {
             const targetMoved = this.getDistanceBetween(pos, this.lastPathTarget);
             if (targetMoved.distance > this.pathTargetMoveThreshold) {
@@ -631,6 +661,20 @@ class Combat extends ModuleBase {
         this.startRotationToTarget();
     }
 
+    performStrafe() {
+        const yaw = Player.getYaw();
+        const strafeYaw = yaw + 90;
+
+        const rad = (strafeYaw * Math.PI) / 180;
+        const moveX = -Math.sin(rad);
+        const moveZ = Math.cos(rad);
+
+        Keybind.setKey('w', false);
+        Keybind.setKey('a', moveX < -0.3);
+        Keybind.setKey('d', moveX > 0.3);
+        Keybind.setKey('s', moveZ < -0.3);
+    }
+
     handleAttackingState(pos, distanceData) {
         if (distanceData.distance > this.pathfindingThreshold) {
             this.startPathingToTarget(pos);
@@ -645,12 +689,35 @@ class Combat extends ModuleBase {
         if (distanceData) this.tryAttack();
         this.startRotationToTarget();
 
-        Keybind.setKeysForStraightLineCoords(pos.x, pos.y, pos.z, true, true);
+        if (distanceData.distance <= 3 && distanceData.distance >= 2) {
+            this.performStrafe();
+        } else {
+            Keybind.setKeysForStraightLineCoords(pos.x, pos.y, pos.z, true, true);
+        }
+
         if (distanceData.distanceFlat <= 2) Keybind.stopMovement();
         if (distanceData.distanceY < -3) {
             Keybind.setKey('space', true);
         }
         Keybind.setKey('sprint', true);
+    }
+
+    predictTargetPosition(target, ticksAhead) {
+        try {
+            const entity = target.toMC ? target.toMC() : target;
+            if (!entity || typeof entity.getMotion !== 'function') return null;
+
+            const motion = entity.getMotion();
+            const pos = this.getTargetPosition(target);
+
+            return {
+                x: pos.x + motion.x * ticksAhead * 0.05,
+                y: pos.y + motion.y * ticksAhead * 0.05,
+                z: pos.z + motion.z * ticksAhead * 0.05,
+            };
+        } catch (e) {
+            return null;
+        }
     }
 
     startPathingToTarget(pos) {
@@ -662,7 +729,8 @@ class Combat extends ModuleBase {
             return;
         }
 
-        const end = this.buildPathEndpoints(pos);
+        const predictedPos = this.predictTargetPosition(this.target, 20);
+        const end = this.buildPathEndpoints(predictedPos || pos);
 
         this.lastPathTarget = { x: pos.x, y: pos.y, z: pos.z };
         this.isPathing = true;
@@ -745,10 +813,60 @@ class Combat extends ModuleBase {
         return false;
     }
 
+    findOptimalHitPoint(target) {
+        try {
+            const entity = target.toMC ? target.toMC() : target;
+            const box = entity.getBoundingBox();
+            if (!box) return null;
+
+            const height = box.maxY - box.minY;
+            const centerX = (box.minX + box.maxX) / 2;
+            const centerZ = (box.minZ + box.maxZ) / 2;
+
+            return {
+                x: centerX,
+                y: box.minY + height * 0.7,
+                z: centerZ,
+            };
+        } catch (e) {
+            return null;
+        }
+    }
+
+    shouldComboAttack() {
+        const distanceData = this.getDistanceToPlayer(this.getTargetPosition(this.target));
+        if (distanceData.distance > 3) return false;
+
+        try {
+            const entity = this.target.toMC ? this.target.toMC() : this.target;
+            const motionY = entity.getMotion?.()?.y || 0;
+            if (Math.abs(motionY) < 0.1) return true;
+        } catch (e) {}
+
+        return false;
+    }
+
+    performComboAttack() {
+        Keybind.leftClick();
+        setTimeout(() => Keybind.leftClick(), 50);
+    }
+
     tryAttack() {
         const now = Date.now();
         const cooldown = 1000 / this.attackCPS;
         if (now - this.lastAttackTime < cooldown) return;
+
+        if (this.shouldComboAttack()) {
+            this.performComboAttack();
+            this.lastAttackTime = now;
+            return;
+        }
+
+        const optimalHitPoint = this.findOptimalHitPoint(this.target);
+        if (optimalHitPoint) {
+            Rotations.rotateToVector(optimalHitPoint);
+        }
+
         Keybind.leftClick();
         this.lastAttackTime = now;
     }
@@ -793,6 +911,12 @@ class Combat extends ModuleBase {
         const mobs = [];
 
         const addMobIfSafe = (entity) => {
+            try {
+                const health = entity.getHealth?.();
+                const maxHealth = entity.getMaxHealth?.();
+                if (health && maxHealth && health / maxHealth < 0.15) return;
+            } catch (e) {}
+
             const x = entity.getX();
             const y = entity.getY();
             const z = entity.getZ();
@@ -920,6 +1044,47 @@ class Combat extends ModuleBase {
         return bestTarget;
     }
 
+    estimatePathability(pos) {
+        const playerY = Player.getY();
+        const yDiff = Math.abs(pos.y - playerY);
+
+        if (yDiff > 10) return 3;
+        if (yDiff > 5) return 1.5;
+
+        const world = World.getWorld();
+        const midX = Math.floor((Player.getX() + pos.x) / 2);
+        const midZ = Math.floor((Player.getZ() + pos.z) / 2);
+
+        try {
+            for (let y = Math.floor(playerY) - 2; y <= Math.floor(playerY) + 2; y++) {
+                const block = world.getBlockState(new BP(midX, y, midZ));
+                if (block && !block.getCollisionShape(world, new BP(midX, y, midZ)).isEmpty()) {
+                    return 1;
+                }
+            }
+        } catch (e) {}
+
+        return 0;
+    }
+
+    calculateClusterBonus(target) {
+        if (!this.targets || this.targets.length < 2) return 0;
+
+        const targetPos = this.getTargetPosition(target);
+        let nearbyCount = 0;
+
+        this.targets.forEach((other) => {
+            if (other === target) return;
+            const otherPos = this.getTargetPosition(other);
+            if (!otherPos) return;
+
+            const dist = this.getDistanceBetween(targetPos, otherPos);
+            if (dist.distance < 8) nearbyCount++;
+        });
+
+        return nearbyCount;
+    }
+
     scoreTarget(target) {
         if (this.isTargetInvalid(target)) return Infinity;
 
@@ -931,6 +1096,12 @@ class Combat extends ModuleBase {
 
         let score = distanceData.distance * TARGET_SCORE.DISTANCE_WEIGHT + angles.distance * TARGET_SCORE.ANGLE_WEIGHT;
         score -= priority * TARGET_SCORE.PRIORITY_WEIGHT;
+
+        const pathabilityScore = this.estimatePathability(pos);
+        score += pathabilityScore * 15;
+
+        const clusterBonus = this.calculateClusterBonus(target);
+        score -= clusterBonus * 5;
 
         if (isCurrentTarget && distanceData.distance < this.targetStickinessRange) {
             score -= TARGET_SCORE.CURRENT_TARGET_BONUS;
