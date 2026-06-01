@@ -14,10 +14,40 @@ class Routes {
     _normalizeRoute(rawRoute) {
         if (!rawRoute) return [];
 
+        const normalized = [];
+
+        if (rawRoute.waypoints && rawRoute.waypointAnchors) {
+            for (let i = 0; i < rawRoute.waypoints.length; i++) {
+                const wp = rawRoute.waypoints[i];
+                if (wp && wp.pos) {
+                    normalized.push({
+                        x: Math.floor(wp.pos.x),
+                        y: Math.floor(wp.pos.y),
+                        z: Math.floor(wp.pos.z),
+                        movements: wp.type ? wp.type.toUpperCase() : 'WALK'
+                    });
+                }
+                
+                const anchors = rawRoute.waypointAnchors[i.toString()];
+                if (anchors && Array.isArray(anchors)) {
+                    for (const anchor of anchors) {
+                        if (anchor && typeof anchor.x === 'number') {
+                            normalized.push({
+                                x: Math.floor(anchor.x),
+                                y: Math.floor(anchor.y),
+                                z: Math.floor(anchor.z),
+                                movements: 'MINEABLE'
+                            });
+                        }
+                    }
+                }
+            }
+            return normalized;
+        }
+
         const routeArray = Array.isArray(rawRoute) ? rawRoute : Array.isArray(rawRoute.waypoints) ? rawRoute.waypoints : Array.isArray(rawRoute.points) ? rawRoute.points : null;
         if (!routeArray) return [];
 
-        const normalized = [];
         for (const point of routeArray) {
             let p = point;
             if (point.pos) p = point.pos;
@@ -133,22 +163,48 @@ class Routes {
             const nameMatch = fileName.match(/([^\/]+)(?=\.json$|$)/);
             const routeName = nameMatch ? nameMatch[1] : 'unknown';
 
+            const waypoints = [];
+            const waypointAnchors = {};
+            let currentWaypointIndex = -1;
+
+            for (const pt of normalizedArray) {
+                if (pt.movements === 'MINEABLE') {
+                    if (currentWaypointIndex === -1) {
+                        waypoints.push({
+                            type: "Walk",
+                            pos: { x: pt.x, y: pt.y, z: pt.z },
+                            sneak: null,
+                            allowMovement: null,
+                            jumpAtEnd: null
+                        });
+                        currentWaypointIndex++;
+                    }
+                    if (!waypointAnchors[currentWaypointIndex.toString()]) {
+                        waypointAnchors[currentWaypointIndex.toString()] = [];
+                    }
+                    waypointAnchors[currentWaypointIndex.toString()].push({
+                        x: pt.x,
+                        y: pt.y,
+                        z: pt.z
+                    });
+                } else {
+                    waypoints.push({
+                        type: pt.movements ? pt.movements.charAt(0).toUpperCase() + pt.movements.slice(1).toLowerCase() : "Walk",
+                        pos: { x: pt.x, y: pt.y, z: pt.z },
+                        sneak: null,
+                        allowMovement: null,
+                        jumpAtEnd: null
+                    });
+                    currentWaypointIndex++;
+                }
+            }
+
             const newFormat = {
                 type: "MiningRoute",
                 name: routeName,
                 warpCommand: null,
-                waypoints: normalizedArray.map((pt) => ({
-                    type: pt.movements ? pt.movements.charAt(0).toUpperCase() + pt.movements.slice(1).toLowerCase() : "Walk",
-                    pos: {
-                        x: pt.x,
-                        y: pt.y,
-                        z: pt.z
-                    },
-                    sneak: null,
-                    allowMovement: null,
-                    jumpAtEnd: null
-                })),
-                waypointAnchors: {}
+                waypoints: waypoints,
+                waypointAnchors: waypointAnchors
             };
 
             return Utils.writeConfigFile(fileName, newFormat);
