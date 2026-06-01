@@ -112,6 +112,13 @@ class Combat extends ModuleBase {
         this.searchTarget = null;
         this.searchTargetSetTime = 0;
         this.pathRequestToken = 0;
+        this.strafeAngle = 0;
+        this.strafeDirection = 1;
+        this.lastStrafeTime = 0;
+        this.lastStrafeX = 0;
+        this.lastStrafeZ = 0;
+        this.STRAFE_SMOOTHING = 0.15;
+        this.STRAFE_RADIUS = 2.5;
 
         this.addMultiToggle(
             'Target Presets',
@@ -661,18 +668,46 @@ class Combat extends ModuleBase {
         this.startRotationToTarget();
     }
 
-    performStrafe() {
-        const yaw = Player.getYaw();
-        const strafeYaw = yaw + 90;
+    performStrafe(targetPos) {
+        const now = Date.now();
+        const deltaTime = Math.min((now - this.lastStrafeTime) / 1000, 0.1);
+        this.lastStrafeTime = now;
 
+        const playerX = Player.getX();
+        const playerZ = Player.getZ();
+
+        const dx = targetPos.x - playerX;
+        const dz = targetPos.z - playerZ;
+        const angleToTarget = Math.atan2(dz, dx) * (180 / Math.PI);
+
+        const currentAngle = Player.getYaw();
+        const angleDiff = angleToTarget - currentAngle;
+
+        if (Math.abs(angleDiff) > 90) {
+            this.strafeDirection = angleDiff > 0 ? -1 : 1;
+        }
+
+        this.strafeAngle += this.strafeDirection * 90 * deltaTime * this.STRAFE_SMOOTHING;
+
+        const strafeYaw = angleToTarget + this.strafeAngle;
         const rad = (strafeYaw * Math.PI) / 180;
-        const moveX = -Math.sin(rad);
-        const moveZ = Math.cos(rad);
 
-        Keybind.setKey('w', false);
-        Keybind.setKey('a', moveX < -0.3);
-        Keybind.setKey('d', moveX > 0.3);
-        Keybind.setKey('s', moveZ < -0.3);
+        const targetMoveX = -Math.sin(rad);
+        const targetMoveZ = Math.cos(rad);
+
+        const currentMoveX = this.lastStrafeX || 0;
+        const currentMoveZ = this.lastStrafeZ || 0;
+
+        const smoothMoveX = currentMoveX + (targetMoveX - currentMoveX) * this.STRAFE_SMOOTHING;
+        const smoothMoveZ = currentMoveZ + (targetMoveZ - currentMoveZ) * this.STRAFE_SMOOTHING;
+
+        this.lastStrafeX = smoothMoveX;
+        this.lastStrafeZ = smoothMoveZ;
+
+        Keybind.setKey('w', smoothMoveZ > 0.3);
+        Keybind.setKey('s', smoothMoveZ < -0.3);
+        Keybind.setKey('a', smoothMoveX < -0.3);
+        Keybind.setKey('d', smoothMoveX > 0.3);
     }
 
     handleAttackingState(pos, distanceData) {
@@ -689,9 +724,14 @@ class Combat extends ModuleBase {
         if (distanceData) this.tryAttack();
         this.startRotationToTarget();
 
-        if (distanceData.distance <= 3 && distanceData.distance >= 2) {
-            this.performStrafe();
+        const optimalStrafeRange = 2.5;
+        const strafeTolerance = 0.5;
+        const inStrafeRange = Math.abs(distanceData.distance - optimalStrafeRange) < strafeTolerance;
+
+        if (inStrafeRange) {
+            this.performStrafe(pos);
         } else {
+            this.resetStrafeState();
             Keybind.setKeysForStraightLineCoords(pos.x, pos.y, pos.z, true, true);
         }
 
@@ -700,6 +740,12 @@ class Combat extends ModuleBase {
             Keybind.setKey('space', true);
         }
         Keybind.setKey('sprint', true);
+    }
+
+    resetStrafeState() {
+        this.strafeAngle = 0;
+        this.lastStrafeX = 0;
+        this.lastStrafeZ = 0;
     }
 
     predictTargetPosition(target, ticksAhead) {
