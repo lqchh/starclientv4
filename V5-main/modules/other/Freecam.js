@@ -81,8 +81,7 @@ class Freecam extends ModuleBase {
     }
 
     onTick() {
-        if (!this.enabled) return;
-        if (!World.isLoaded()) return;
+        if (!this.enabled || !World.isLoaded() || Client.isInGui()) return;
 
         const player = Player.getPlayer();
         if (!player) return;
@@ -96,37 +95,48 @@ class Freecam extends ModuleBase {
         }
 
         const options = mc.options;
-        const yaw = (player.getYaw() * Math.PI) / 180;
+        const yawRad = (player.getYaw() * Math.PI) / 180;
+        const pitchRad = (player.getPitch() * Math.PI) / 180;
 
         let moveX = 0;
         let moveY = 0;
         let moveZ = 0;
 
-        const forwardX = -Math.sin(yaw);
-        const forwardZ = Math.cos(yaw);
-        const leftX = Math.cos(yaw);
-        const leftZ = Math.sin(yaw);
+        // Use physical key states to avoid macro interference
+        const isDown = (keyBind) => {
+            const keyCode = keyBind?.boundKey?.code;
+            return keyCode ? Keyboard.isKeyDown(keyCode) : keyBind.isPressed();
+        };
 
-        if (options.forwardKey.isPressed()) {
+        const forwardX = -Math.sin(yawRad) * Math.cos(pitchRad);
+        const forwardY = -Math.sin(pitchRad);
+        const forwardZ = Math.cos(yawRad) * Math.cos(pitchRad);
+
+        const leftX = Math.cos(yawRad);
+        const leftZ = Math.sin(yawRad);
+
+        if (isDown(options.forwardKey)) {
             moveX += forwardX;
+            moveY += forwardY;
             moveZ += forwardZ;
         }
-        if (options.backKey.isPressed()) {
+        if (isDown(options.backKey)) {
             moveX -= forwardX;
+            moveY -= forwardY;
             moveZ -= forwardZ;
         }
-        if (options.leftKey.isPressed()) {
+        if (isDown(options.leftKey)) {
             moveX += leftX;
             moveZ += leftZ;
         }
-        if (options.rightKey.isPressed()) {
+        if (isDown(options.rightKey)) {
             moveX -= leftX;
             moveZ -= leftZ;
         }
-        if (options.jumpKey.isPressed()) {
+        if (isDown(options.jumpKey)) {
             moveY += 1;
         }
-        if (options.sneakKey.isPressed()) {
+        if (isDown(options.sneakKey)) {
             moveY -= 1;
         }
 
