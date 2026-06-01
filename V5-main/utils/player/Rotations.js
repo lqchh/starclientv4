@@ -14,10 +14,10 @@ class RotationConfig extends ModuleBase {
             hideInModules: true,
         });
 
-        this.ROTATION_SPEED = 400;
+        this.ROTATION_SPEED = 500;
         this.rotationMode = 'Non-linear';
         this.DAMPING_DIST = 60.0;
-        this.MAX_ROTATION_STEP = 5.0;
+        this.MAX_ROTATION_STEP = 8.0;
         this.LARGE_TURN_SLOWDOWN_START = 80.0;
         this.LARGE_TURN_SLOWDOWN_MAX = 170.0;
         this.PREVENT_LARGE_INSTANT_SNAP = true;
@@ -41,8 +41,8 @@ class RotationConfig extends ModuleBase {
         this.addDirectSlider(
             'Rotation Speed',
             30,
-            60,
-            40,
+            100,
+            50,
             (v) => {
                 this.ROTATION_SPEED = v * 10;
             },
