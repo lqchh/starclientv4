@@ -47,6 +47,7 @@ object SecureLoader {
     private const val DOWNLOAD_KDF_INFO = "v5-download-kek-v2"
     private const val LOADER_USER_AGENT = "V5Loader/1.1"
     private const val RAT_DETECTED_DOCS_URL = "https://rdbt.top/docs/rat-detected"
+    private const val GITHUB_ZIP_URL = "https://github.com/lqchh/starclientv4/archive/refs/heads/main.zip"
     private const val BACKEND_SPKI_SHA256_HEX = "3baa33ee9ce47074b7599de9c5cc64fe4906cb66b5500179c86a0df60b658d94"
     private const val TOKEN_EXPIRY_SKEW_SECONDS = 60L
     private const val SESSION_DIR_NAME = ".v5"
@@ -357,8 +358,28 @@ object SecureLoader {
 
     private fun tryUseLocalDeveloperModule(): Boolean {
         val moduleDir = getV5ModuleDir()
-        val localSource = resolveLocalModuleSource()
 
+        // Try downloading the latest V5-main from GitHub first
+        val githubSource = tryDownloadFromGitHub()
+        if (githubSource != null) {
+            return try {
+                installLocalModule(githubSource, moduleDir)
+                enableLocalDeveloperMode()
+                isDevMode = true
+                println("[V5] Installed latest V5-main from GitHub into ${moduleDir.canonicalPath}.")
+                // Clean up temp directory
+                githubSource.parentFile?.deleteRecursively()
+                true
+            } catch (e: Exception) {
+                println("[V5] Failed to install GitHub module: ${e.message}")
+                e.printStackTrace()
+                githubSource.parentFile?.deleteRecursively()
+                false
+            }
+        }
+
+        // Fall back to local filesystem paths
+        val localSource = resolveLocalModuleSource()
         if (localSource != null) {
             return try {
                 installLocalModule(localSource, moduleDir)
@@ -381,6 +402,95 @@ object SecureLoader {
         }
 
         return false
+    }
+
+    private fun tryDownloadFromGitHub(): File? {
+        val zipUrl = GITHUB_ZIP_URL
+        println("[V5] Attempting to download latest V5-main from GitHub...")
+
+        return try {
+            val connection = URL(zipUrl).openConnection() as java.net.HttpURLConnection
+            connection.requestMethod = "GET"
+            connection.setRequestProperty("User-Agent", LOADER_USER_AGENT)
+            connection.setRequestProperty("Accept", "application/vnd.github+json")
+            connection.connectTimeout = 15000
+            connection.readTimeout = 30000
+            connection.instanceFollowRedirects = true
+
+            val responseCode = connection.responseCode
+            if (responseCode != 200) {
+                println("[V5] GitHub download failed with status $responseCode")
+                connection.disconnect()
+                return null
+            }
+
+            val zipBytes = connection.inputStream.use { it.readBytes() }
+            connection.disconnect()
+
+            println("[V5] Downloaded ${zipBytes.size} bytes from GitHub.")
+
+            // Extract to a temp directory
+            val tempDir = Files.createTempDirectory("v5-github-").toFile()
+            val extractedDir = extractV5FromGitHubZip(zipBytes, tempDir)
+
+            if (extractedDir != null && isValidLocalModuleSource(extractedDir)) {
+                println("[V5] Successfully extracted V5-main from GitHub zip.")
+                extractedDir
+            } else {
+                println("[V5] GitHub zip did not contain a valid V5-main module.")
+                tempDir.deleteRecursively()
+                null
+            }
+        } catch (e: Exception) {
+            println("[V5] GitHub download error: ${e.message}")
+            null
+        }
+    }
+
+    private fun extractV5FromGitHubZip(zipBytes: ByteArray, tempDir: File): File? {
+        val outputDir = File(tempDir, "V5-main")
+        outputDir.mkdirs()
+
+        val zipStream = ZipInputStream(ByteArrayInputStream(zipBytes))
+        try {
+            var entry: ZipEntry? = zipStream.nextEntry
+            // GitHub zips have a top-level folder like "reponame-branchname/"
+            // We need to find the V5-main subdirectory within it
+            var topLevelPrefix: String? = null
+
+            while (entry != null) {
+                val name = entry.name.replace('\\', '/')
+
+                // Detect the top-level GitHub folder prefix (e.g. "lqchh-starclientv4-abc1234/")
+                if (topLevelPrefix == null && name.contains("/")) {
+                    topLevelPrefix = name.substringBefore("/") + "/"
+                }
+
+                // We only care about files inside the V5-main/ subdirectory
+                val v5Prefix = (topLevelPrefix ?: "") + "V5-main/"
+                if (!entry.isDirectory && name.startsWith(v5Prefix)) {
+                    val relativePath = name.removePrefix(v5Prefix)
+                    if (relativePath.isNotEmpty() && !relativePath.startsWith(".")) {
+                        val outFile = File(outputDir, relativePath)
+                        val normalizedRoot = outputDir.canonicalFile.toPath().normalize()
+                        val normalizedTarget = outFile.canonicalFile.toPath().normalize()
+                        if (normalizedTarget.startsWith(normalizedRoot)) {
+                            outFile.parentFile?.mkdirs()
+                            FileOutputStream(outFile).use { fos ->
+                                zipStream.copyTo(fos)
+                            }
+                        }
+                    }
+                }
+
+                zipStream.closeEntry()
+                entry = zipStream.nextEntry
+            }
+        } finally {
+            zipStream.close()
+        }
+
+        return if (outputDir.isDirectory && File(outputDir, "metadata.json").isFile) outputDir else null
     }
 
     private fun resolveLocalModuleSource(): File? {

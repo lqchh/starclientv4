@@ -251,10 +251,8 @@ fun downloadFile(url: String): ByteArray {
 }
 
 fun getBranch(): String {
-    val stdout = ByteArrayOutputStream()
-    exec {
+    val stdout = providers.exec {
         commandLine("git", "rev-parse", "HEAD")
-        standardOutput = stdout
-    }
-    return stdout.toString().trim()
+    }.standardOutput.asText.get()
+    return stdout.trim()
 }

@@ -3123,6 +3123,7 @@ public class com/v5/mixins/BlockModelRendererMixin {
 public abstract class com/v5/mixins/CameraMixin {
 	public fun <init> ()V
 	protected abstract fun setPos (Lnet/minecraft/util/math/Vec3d;)V
+	protected abstract fun setRotation (FF)V
 }
 
 public class com/v5/mixins/ChatHudMixin {
