@@ -1,6 +1,7 @@
 import { BP, BlockHitResult, Direction, MCHand, Vec3d } from '../Constants';
 import { PlayerInteractBlockC2S } from '../Packets';
 import { ScheduleTask } from '../ScheduleTask';
+import { Mixin } from '../MixinManager';
 import { Utils, mc } from '../Utils';
 import { MacroCpsTracker } from './MacroCpsTracker';
 
@@ -84,12 +85,37 @@ class ControlSystem {
 
         const keyObj = mapping[action];
         if (keyObj) {
+            this.setMacroInput(action, !!isPressed);
             ScheduleTask(() => {
                 keyObj.setPressed(!!isPressed);
             });
             return true;
         }
         return false;
+    }
+
+    setMacroInput(action, isPressed) {
+        const mapping = {
+            w: 'macroInputForward',
+            s: 'macroInputBack',
+            a: 'macroInputLeft',
+            d: 'macroInputRight',
+            space: 'macroInputJump',
+            shift: 'macroInputSneak',
+            sprint: 'macroInputSprint',
+        };
+
+        const key = mapping[action];
+        if (!key) return;
+        Mixin.set(key, !!isPressed);
+    }
+
+    clearMacroMovementIntent(includeSprintSneak = false) {
+        ['macroInputForward', 'macroInputBack', 'macroInputLeft', 'macroInputRight', 'macroInputJump'].forEach((key) => Mixin.set(key, false));
+        if (includeSprintSneak) {
+            Mixin.set('macroInputSneak', false);
+            Mixin.set('macroInputSprint', false);
+        }
     }
 
     checkKeyDown(key) {
@@ -172,12 +198,15 @@ class ControlSystem {
         for (var i = 0; i < keys.length; i++) {
             this.updateKeyState(keys[i], false);
         }
+        this.clearMacroMovementIntent(false);
     }
 
     fullRelease() {
         this.haltMovement();
         this.updateKeyState('shift', false);
         this.updateKeyState('leftclick', false);
+        this.updateKeyState('sprint', false);
+        this.clearMacroMovementIntent(true);
     }
 
     refreshCooldown() {

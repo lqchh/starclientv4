@@ -1,5 +1,6 @@
 import { Vec3d } from '../../utils/Constants';
 import { Camera } from '../../utils/Camera';
+import { MacroState } from '../../utils/MacroState';
 import { Mixin } from '../../utils/MixinManager';
 import { ModuleBase } from '../../utils/ModuleBase';
 import { Keybind } from '../../utils/player/Keybinding';
@@ -59,7 +60,9 @@ class Freecam extends ModuleBase {
         this.cameraPos = this.getInitialCameraPos(player, this.freecamYaw, this.freecamPitch);
         this.velocity = new Vec3d(0, 0, 0);
         this.savedPerspective = mc.options.getPerspective();
-        Keybind.unpressKeys();
+        if (!MacroState.isMacroRunning()) {
+            Keybind.unpressKeys();
+        }
         Mixin.set('freecamEnabled', true);
         Mixin.set('freecamFrozenYaw', true);
         Mixin.set('freecamFrozenPitch', true);
@@ -73,7 +76,9 @@ class Freecam extends ModuleBase {
         this.message('&cDisabled');
         this.cameraPos = null;
         this.velocity = new Vec3d(0, 0, 0);
-        Keybind.unpressKeys();
+        if (!MacroState.isMacroRunning()) {
+            Keybind.unpressKeys();
+        }
         Mixin.set('freecamEnabled', false);
         Mixin.delete('freecamFrozenYaw');
         Mixin.delete('freecamFrozenPitch');

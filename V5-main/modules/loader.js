@@ -11,6 +11,12 @@ import './mining/PinglessMining';
 import './mining/TunnelsMiner';
 //import './mining/VeinDetectorTest';
 
+/* COMBAT */
+import './combat/CombatBot';
+
+/* SLAYER */
+import './slayer/RevenantSlayer';
+
 /* FORAGING */
 import './foraging/AutoHarp';
 import './foraging/ForagingBot';
