@@ -34,6 +34,8 @@ const CRYPT_BOUNDS = {
     maxZ: -25,
 };
 
+const NAMETAG_BODY_RADIUS = 3.5;
+
 const FILLER_NAMES = ['Crypt Ghoul', 'Golden Ghoul'];
 const MINIBOSS_NAMES = ['Revenant Sycophant', 'Revenant Champion', 'Deformed Revenant', 'Atoned Champion'];
 const BOSS_NAMES = ['Revenant Horror', 'Atoned Horror'];
@@ -300,14 +302,30 @@ class RevenantSlayer extends ModuleBase {
 
     findRevenantTargets() {
         const targets = [];
+        const wrappedZombieIds = new Set();
         CombatBot.findMob(TARGET_CONFIG).forEach((mob) => targets.push(mob));
+
+        this.findNamedZombieTargets().forEach((target) => {
+            targets.push(target);
+            const uuid = this.getEntityUuid(target);
+            if (uuid) wrappedZombieIds.add(uuid);
+        });
 
         World.getAllEntitiesOfType(ZombieEntity).forEach((entity) => {
             try {
                 if (entity.isDead()) return;
-                const name = this.cleanName(entity.getName?.());
-                if (!this.matchesTargetName(name)) return;
                 if (!TARGET_CONFIG.boundaryCheck(entity.getX(), entity.getY(), entity.getZ())) return;
+
+                const uuid = this.getEntityUuid(entity);
+                if (uuid && wrappedZombieIds.has(uuid)) return;
+
+                const name = this.cleanName(entity.getName?.());
+                if (name && this.matchesTargetName(name)) {
+                    targets.push(entity);
+                    return;
+                }
+
+                if (!this.isLikelyCryptZombie(entity)) return;
                 targets.push(entity);
             } catch (e) {
                 console.error('V5 Caught error' + e + e.stack);
@@ -315,6 +333,70 @@ class RevenantSlayer extends ModuleBase {
         });
 
         return targets;
+    }
+
+    findNamedZombieTargets() {
+        const out = [];
+        const used = new Set();
+        const stands = World.getAllEntitiesOfType(ArmorStandEntity) || [];
+        const zombies = World.getAllEntitiesOfType(ZombieEntity) || [];
+
+        stands.forEach((stand) => {
+            try {
+                const standName = this.cleanName(stand.getName?.());
+                if (!this.matchesTargetName(standName)) return;
+                if (!TARGET_CONFIG.boundaryCheck(stand.getX(), stand.getY(), stand.getZ())) return;
+
+                const body = this.findNearestZombieBody(stand, zombies, used);
+                if (!body) return;
+
+                const uuid = this.getEntityUuid(body);
+                if (uuid) used.add(uuid);
+                out.push(this.wrapNamedTarget(body, standName));
+            } catch (e) {
+                console.error('V5 Caught error' + e + e.stack);
+            }
+        });
+
+        return out;
+    }
+
+    findNearestZombieBody(stand, zombies, used) {
+        let best = null;
+        let bestDistance = Infinity;
+
+        zombies.forEach((zombie) => {
+            try {
+                if (!zombie || zombie.isDead?.()) return;
+                const uuid = this.getEntityUuid(zombie);
+                if (uuid && used.has(uuid)) return;
+                if (!TARGET_CONFIG.boundaryCheck(zombie.getX(), zombie.getY(), zombie.getZ())) return;
+
+                const dx = zombie.getX() - stand.getX();
+                const dy = zombie.getY() - stand.getY();
+                const dz = zombie.getZ() - stand.getZ();
+                const distance = Math.hypot(dx, dy, dz);
+                if (distance > NAMETAG_BODY_RADIUS || distance >= bestDistance) return;
+
+                best = zombie;
+                bestDistance = distance;
+            } catch (e) {}
+        });
+
+        return best;
+    }
+
+    wrapNamedTarget(entity, displayName) {
+        return {
+            name: displayName,
+            getName: () => displayName,
+            getX: () => entity.getX(),
+            getY: () => entity.getY(),
+            getZ: () => entity.getZ(),
+            getUUID: () => entity.getUUID(),
+            isDead: () => entity.isDead(),
+            toMC: () => (entity.toMC ? entity.toMC() : entity),
+        };
     }
 
     configureCombatBot() {
@@ -536,6 +618,31 @@ class RevenantSlayer extends ModuleBase {
     matchesBossName(name) {
         const lower = String(name || '').toLowerCase();
         return BOSS_NAMES.some((targetName) => lower.includes(targetName.toLowerCase()));
+    }
+
+    isLikelyCryptZombie(entity) {
+        try {
+            if (!entity || entity.isDead?.()) return false;
+            if (!TARGET_CONFIG.boundaryCheck(entity.getX(), entity.getY(), entity.getZ())) return false;
+
+            const name = this.cleanName(entity.getName?.()).toLowerCase();
+            if (name && name !== 'zombie' && name !== 'zombie villager') {
+                return this.matchesTargetName(name);
+            }
+
+            return this.isInHubArea() && this.isNearCrypts();
+        } catch (e) {
+            return false;
+        }
+    }
+
+    getEntityUuid(entity) {
+        try {
+            if (!entity) return null;
+            if (entity.getUUID) return entity.getUUID().toString();
+            if (entity.toMC?.().getUuid) return entity.toMC().getUuid().toString();
+        } catch (e) {}
+        return null;
     }
 
     cleanName(text) {
