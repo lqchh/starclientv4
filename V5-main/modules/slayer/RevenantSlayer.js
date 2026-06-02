@@ -37,9 +37,13 @@ const CRYPT_BOUNDS = {
 const NAMETAG_BODY_RADIUS = 3.5;
 
 const CRYPT_GHOUL_NAMES = ['Crypt Ghoul'];
+const MINIBOSS_NAMES = ['Revenant Sycophant', 'Revenant Champion', 'Deformed Revenant', 'Atoned Champion'];
+const BOSS_NAMES = ['Revenant Horror', 'Atoned Horror'];
+const URGENT_TARGET_NAMES = [...MINIBOSS_NAMES, ...BOSS_NAMES];
+const ALLOWED_TARGET_NAMES = [...CRYPT_GHOUL_NAMES, ...URGENT_TARGET_NAMES];
 
 const TARGET_CONFIG = {
-    names: CRYPT_GHOUL_NAMES,
+    names: ALLOWED_TARGET_NAMES,
     checkVisibility: true,
     boundaryCheck: (x, y, z) => x >= CRYPT_BOUNDS.minX && x <= CRYPT_BOUNDS.maxX && y >= CRYPT_BOUNDS.minY && y <= CRYPT_BOUNDS.maxY && z >= CRYPT_BOUNDS.minZ && z <= CRYPT_BOUNDS.maxZ,
 };
@@ -289,6 +293,7 @@ class RevenantSlayer extends ModuleBase {
     feedCombatTargets() {
         const mobs = this.findRevenantTargets();
         this.targetCount = mobs.length;
+        this.interruptForUrgentTargets(mobs);
         CombatBot.setExternalTargets(mobs);
         this.configureCombatBot();
 
@@ -325,6 +330,21 @@ class RevenantSlayer extends ModuleBase {
         });
 
         return targets;
+    }
+
+    interruptForUrgentTargets(targets) {
+        if (!Array.isArray(targets) || targets.length === 0) return;
+        const urgentTargets = targets.filter((target) => this.isUrgentTargetName(this.cleanName(target.getName?.())));
+        if (urgentTargets.length === 0) return;
+
+        const currentName = this.cleanName(CombatBot.target?.getName?.());
+        if (this.isUrgentTargetName(currentName)) return;
+
+        if (typeof CombatBot.stopCombat === 'function') {
+            CombatBot.stopCombat();
+        } else {
+            CombatBot.target = null;
+        }
     }
 
     findNamedZombieTargets() {
@@ -393,6 +413,8 @@ class RevenantSlayer extends ModuleBase {
 
     configureCombatBot() {
         CombatBot.setTargetPriorityRules([
+            { names: BOSS_NAMES, priority: 10 },
+            { names: MINIBOSS_NAMES, priority: 7 },
             { names: CRYPT_GHOUL_NAMES, priority: 1 },
         ]);
     }
@@ -539,7 +561,7 @@ class RevenantSlayer extends ModuleBase {
 
     isBossActive() {
         if (Date.now() - this.lastBossSeenAt < 7000) return true;
-        return false;
+        return this.findRevenantTargets().some((target) => this.isUrgentTargetName(this.cleanName(target.getName?.())));
     }
 
     isInHubArea() {
@@ -602,7 +624,12 @@ class RevenantSlayer extends ModuleBase {
 
     matchesTargetName(name) {
         const lower = String(name || '').toLowerCase();
-        return CRYPT_GHOUL_NAMES.some((targetName) => lower.includes(targetName.toLowerCase()));
+        return ALLOWED_TARGET_NAMES.some((targetName) => lower.includes(targetName.toLowerCase()));
+    }
+
+    isUrgentTargetName(name) {
+        const lower = String(name || '').toLowerCase();
+        return URGENT_TARGET_NAMES.some((targetName) => lower.includes(targetName.toLowerCase()));
     }
 
     getEntityUuid(entity) {
