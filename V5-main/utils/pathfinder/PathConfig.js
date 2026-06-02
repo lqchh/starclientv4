@@ -26,6 +26,11 @@ class PathFindingConfig extends ModuleBase {
         this.DEFAULT_PATHFINDER_MAX_COMPUTE = 500_000;
         this.PATHFINDER_MAX_COMPUTE = this.DEFAULT_PATHFINDER_MAX_COMPUTE;
 
+        this.RECOVERY_AGGRESSIVENESS = 3;
+        this.COMBAT_STRICT_LINE_OF_SIGHT = true;
+        this.CRYPT_ENHANCED_RECOVERY = true;
+        this.DEBUG_VISIBILITY_RAYTRACE = false;
+
         this.addDirectToggle(
             'Pathfinding Debug',
             (value) => {
@@ -97,6 +102,48 @@ class PathFindingConfig extends ModuleBase {
                 this.PATHFINDER_MAX_COMPUTE = this.clampPathfinderMaxCompute(value);
             },
             'Maximum native pathfinder iterations before giving up.',
+            'Pathfinding'
+        );
+
+        this.addDirectSlider(
+            'Recovery Aggressiveness',
+            1,
+            5,
+            3,
+            (value) => {
+                this.RECOVERY_AGGRESSIVENESS = Math.max(1, Math.min(5, Math.floor(value)));
+            },
+            'How aggressively the pathfinder recovers from stuck states (1 = conservative, 5 = aggressive).',
+            'Pathfinding'
+        );
+
+        this.addDirectToggle(
+            'Combat Strict Line-of-Sight',
+            (value) => {
+                this.COMBAT_STRICT_LINE_OF_SIGHT = value;
+            },
+            'Use raytrace-based line-of-sight checking for combat targeting to prevent attacking through walls.',
+            true,
+            'Pathfinding'
+        );
+
+        this.addDirectToggle(
+            'Crypt Enhanced Recovery',
+            (value) => {
+                this.CRYPT_ENHANCED_RECOVERY = value;
+            },
+            'Enable enhanced recovery mechanisms for uncertain terrain areas like the crypt.',
+            true,
+            'Pathfinding'
+        );
+
+        this.addDirectToggle(
+            'Debug Visibility Raytrace',
+            (value) => {
+                this.DEBUG_VISIBILITY_RAYTRACE = value;
+            },
+            'Enable debug output for visibility raytrace checks.',
+            false,
             'Pathfinding'
         );
 

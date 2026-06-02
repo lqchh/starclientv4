@@ -7,6 +7,7 @@ import { Rotations } from '../../utils/player/Rotations';
 import { Raytrace } from '../../utils/Raytrace';
 import Render from '../../utils/render/Render';
 import { HumanizedCpsTimer } from '../../utils/TimeUtils';
+import PathConfig from '../../utils/pathfinder/PathConfig';
 
 const BLACKHOLE_TEXTURES = new Set([
     'ewogICJ0aW1lc3RhbXAiIDogMTczNjE4NDg2Nzc3MywKICAicHJvZmlsZUlkIiA6ICJjNmViMzdjNmE4YjM0MDI3OGJjN2FmZGE3ZjMxOWJmMyIsCiAgInByb2ZpbGVOYW1lIiA6ICJFbFJleUNhbGFiYXphbCIsCiAgInNpZ25hdHVyZVJlcXVpcmVkIiA6IHRydWUsCiAgInRleHR1cmVzIiA6IHsKICAgICJTS0lOIiA6IHsKICAgICAgInVybCIgOiAiaHR0cDovL3RleHR1cmVzLm1pbmVjcmFmdC5uZXQvdGV4dHVyZS81NWI3MGYwOTRlMDE2Nzk1MDhkZDViY2EzOTY0MGVkOWVjNWM2YzY3OTJmYmQ4ZjU3YzAzYjNhMTJmOWMwYTkyIiwKICAgICAgIm1ldGFkYXRhIiA6IHsKICAgICAgICAibW9kZWwiIDogInNsaW0iCiAgICAgIH0KICAgIH0KICB9Cn0=',
@@ -1249,14 +1250,46 @@ class Combat extends ModuleBase {
 
         try {
             if (playerMP.canSeeEntity(target)) {
-                this.recordVisibility(target);
-                return true;
+                if (PathConfig.COMBAT_STRICT_LINE_OF_SIGHT) {
+                    if (this.checkRaytraceVisibility(target)) {
+                        this.recordVisibility(target);
+                        return true;
+                    }
+                } else {
+                    this.recordVisibility(target);
+                    return true;
+                }
             }
         } catch (e) {
             return null;
         }
 
         return uuid && this.recentVisibility.has(uuid) ? true : false;
+    }
+
+    checkRaytraceVisibility(target) {
+        try {
+            const player = Player.getPlayer();
+            if (!player) return true;
+
+            const eyePos = player.getEyePos();
+            if (!eyePos) return true;
+
+            const hitboxCenter = Raytrace.getEntityHitboxCenter(target);
+            if (!hitboxCenter) return true;
+
+            const dx = hitboxCenter.x - eyePos.x;
+            const dy = hitboxCenter.y - eyePos.y;
+            const dz = hitboxCenter.z - eyePos.z;
+            const distance = Math.hypot(dx, dy, dz);
+
+            if (distance > 8) return true;
+
+            const isClear = Raytrace.isLineClear(eyePos.x, eyePos.y, eyePos.z, hitboxCenter.x, hitboxCenter.y, hitboxCenter.z);
+            return isClear;
+        } catch (e) {
+            return true;
+        }
     }
 
     findMob(config, whitelist = null) {

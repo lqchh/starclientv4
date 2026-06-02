@@ -3,22 +3,44 @@ import PathConfig from '../PathConfig';
 
 class PathRecovery {
     constructor() {
-        this.MOVING_THRESHOLD = 0.12;
+        this.BASE_MOVING_THRESHOLD = 0.08;
         this.PROGRESS_THRESHOLD = 3.0;
+        this.BASE_STUCK_TICKS_JUMP = 8;
+        this.BASE_STUCK_TICKS_CLOSE_LOOK = 18;
+        this.BASE_STUCK_TICKS_BACKUP_RECALC = 36;
+
+        this.MOVING_THRESHOLD = this.BASE_MOVING_THRESHOLD;
         this.MOVING_THRESHOLD_SQ = this.MOVING_THRESHOLD * this.MOVING_THRESHOLD;
         this.PROGRESS_THRESHOLD_SQ = this.PROGRESS_THRESHOLD * this.PROGRESS_THRESHOLD;
 
-        this.STUCK_TICKS_JUMP = 10;
-        this.STUCK_TICKS_CLOSE_LOOK = 22;
-        this.STUCK_TICKS_BACKUP_RECALC = 44;
+        this.STUCK_TICKS_JUMP = this.BASE_STUCK_TICKS_JUMP;
+        this.STUCK_TICKS_CLOSE_LOOK = this.BASE_STUCK_TICKS_CLOSE_LOOK;
+        this.STUCK_TICKS_BACKUP_RECALC = this.BASE_STUCK_TICKS_BACKUP_RECALC;
 
         this.lastPos = null;
         this.stuckPos = null;
         this.stuckTicks = 0;
         this.currentLevel = 0;
+        this.microStuckTicks = 0;
+        this.microStuckThreshold = 0.03;
+        this.microStuckThresholdSq = this.microStuckThreshold * this.microStuckThreshold;
+    }
+
+    applyAggressivenessSettings() {
+        const aggressiveness = PathConfig.RECOVERY_AGGRESSIVENESS || 3;
+        const factor = (aggressiveness - 3) * 0.15;
+
+        this.MOVING_THRESHOLD = Math.max(0.04, this.BASE_MOVING_THRESHOLD - factor);
+        this.MOVING_THRESHOLD_SQ = this.MOVING_THRESHOLD * this.MOVING_THRESHOLD;
+
+        this.STUCK_TICKS_JUMP = Math.max(4, Math.floor(this.BASE_STUCK_TICKS_JUMP - factor * 10));
+        this.STUCK_TICKS_CLOSE_LOOK = Math.max(10, Math.floor(this.BASE_STUCK_TICKS_CLOSE_LOOK - factor * 15));
+        this.STUCK_TICKS_BACKUP_RECALC = Math.max(20, Math.floor(this.BASE_STUCK_TICKS_BACKUP_RECALC - factor * 25));
     }
 
     trackProgress() {
+        this.applyAggressivenessSettings();
+
         const player = Player.getPlayer();
         if (!player) return null;
 
@@ -61,6 +83,21 @@ class PathRecovery {
 
         this.stuckTicks++;
         this.lastPos = { x: pX, z: pZ };
+
+        if (distMovedSq < this.microStuckThresholdSq) {
+            this.microStuckTicks++;
+        } else {
+            this.microStuckTicks = 0;
+        }
+
+        if (this.microStuckTicks >= 6 && this.currentLevel < 1) {
+            if (PathConfig.PATHFINDING_DEBUG) {
+                Chat.messagePathfinder('§eMicro-stuck detected: Jump');
+            }
+            this.currentLevel = 1;
+            this.microStuckTicks = 0;
+            return 'JUMP';
+        }
 
         if (this.stuckTicks >= this.STUCK_TICKS_BACKUP_RECALC && this.currentLevel < 3) {
             if (PathConfig.PATHFINDING_DEBUG) {
@@ -114,6 +151,7 @@ class PathRecovery {
         this.stuckTicks = 0;
         this.currentLevel = 0;
         this.stuckPos = null;
+        this.microStuckTicks = 0;
     }
 
     stop() {

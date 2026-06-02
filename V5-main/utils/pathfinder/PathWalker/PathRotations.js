@@ -11,7 +11,7 @@ class PathRotations {
     constructor() {
         this.MIN_LOOKAHEAD = 1.1;
         this.MAX_LOOKAHEAD = 3.5;
-        this.RECOVERY_MIN_LOOKAHEAD = 0.1;
+        this.RECOVERY_MIN_LOOKAHEAD = 0.05;
         this.PROXIMITY_THRESHOLD = 4.0;
         this.COMPLETION_RADIUS = 1.9;
         this.BASE_KP = 0.05;
@@ -24,7 +24,7 @@ class PathRotations {
         this.SMOOTH_FACTOR = 0.1;
         this.MAX_LOOK_DISTANCE = 0.8;
         this.LOOKAHEAD_STEP = 0.4;
-        this.RECOVERY_LOOKAHEAD_STEP = 0.15;
+        this.RECOVERY_LOOKAHEAD_STEP = 0.1;
         this.MAX_DIRECTION_DIVERGENCE = 50.0;
         this.MAX_UPWARD_PITCH = -45.0;
         this.PREDICTION_TICKS = 10;
@@ -37,6 +37,8 @@ class PathRotations {
         this.lookaheadOverrideExpiry = 0;
         this.currentPathCurvature = 0;
         this.failed = false;
+        this.rollbackAttempts = 0;
+        this.maxRollbackAttempts = 12;
 
         this.resetRotations();
 
@@ -88,6 +90,7 @@ class PathRotations {
         this.initialTurnBoostTicks = 0;
         this.postTeleportResyncTicks = 0;
         this.failed = false;
+        this.rollbackAttempts = 0;
         PathRotationsUtility.stopRotation();
     }
 
@@ -300,11 +303,16 @@ class PathRotations {
         }
         this.currentPathCurvature = maxAngle;
         const isFalling = Player.getMotionY() < -0.1;
+        const isInRecovery = this.isInRecoveryMode();
         if (isFalling) maxAngle *= 0.5;
-        const curveFactor = Math.min(1, Math.max(0, (maxAngle - 0.61) / 0.7));
+        
+        let curveFactor = Math.min(1, Math.max(0, (maxAngle - 0.61) / 0.7));
+        if (isInRecovery) curveFactor = Math.min(1, curveFactor * 1.3);
+        
         const adjustFactor = Math.max(deviationFactor, curveFactor);
         const targetLookaheadDistance = this.MAX_LOOKAHEAD - (this.MAX_LOOKAHEAD - this.MIN_LOOKAHEAD) * adjustFactor;
         let lerpFactor = targetLookaheadDistance > this.smoothedLookahead ? 0.1 : 0.05;
+        if (isInRecovery) lerpFactor *= 1.5;
         this.smoothedLookahead += (targetLookaheadDistance - this.smoothedLookahead) * lerpFactor;
         return this.smoothedLookahead;
     }
@@ -404,9 +412,9 @@ class PathRotations {
                 this.unseenStartPathPosition = this.currentPathPosition;
             }
             if (now - this.unseenSince >= 600) {
-                let attempts = 0;
-                const minRollbackPosition = Math.max(0, this.unseenStartPathPosition - 8);
-                while (this.currentPathPosition > minRollbackPosition && attempts < 8) {
+                this.rollbackAttempts = 0;
+                const minRollbackPosition = Math.max(0, this.unseenStartPathPosition - 10);
+                while (this.currentPathPosition > minRollbackPosition && this.rollbackAttempts < this.maxRollbackAttempts) {
                     this.currentPathPosition = Math.max(minRollbackPosition, this.currentPathPosition - 1);
                     const t = Math.min(this.boxPositions.length - 1, this.currentPathPosition + effectiveMin);
                     const rollbackPoint = this.getInterpolatedPoint(t);
@@ -421,7 +429,7 @@ class PathRotations {
                         targetVisible = this.isPointVisible(playerEyes, result.point);
                         break;
                     }
-                    attempts++;
+                    this.rollbackAttempts++;
                 }
                 if (!targetVisible) {
                     this.failRotations();
@@ -431,6 +439,7 @@ class PathRotations {
         } else {
             this.unseenSince = 0;
             this.unseenStartPathPosition = this.currentPathPosition;
+            this.rollbackAttempts = 0;
         }
 
         let targetPoint = result.point;

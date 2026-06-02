@@ -351,7 +351,7 @@ class Finder {
                 //Movement.forceJump(4);
                 break;
             case 'BACKUP_RECALC':
-                this.addTransientAvoidAtPlayer(2, 42, 2);
+                this.addTransientAvoidAtPlayer(2, 42, 2, true);
                 const scheduleId = this.recalculateScheduleId;
                 Movement.backup(15, () => {
                     if (scheduleId !== this.recalculateScheduleId) return;
@@ -367,7 +367,8 @@ class Finder {
         if (!this.isFly) {
             const intensity = this.samePathSignatureCount >= 2 ? 2 : 1;
             this.pathVariantSeed += intensity;
-            this.addTransientAvoidAtPlayer(2 + Math.min(1, intensity), 34 + intensity * 8, 2);
+            const aggressive = this.recalculateAttempts >= 3 || this.samePathSignatureCount >= 2;
+            this.addTransientAvoidAtPlayer(2 + Math.min(1, intensity), 34 + intensity * 8, 2, aggressive);
         }
 
         this.recalculateAttempts++;
@@ -427,11 +428,11 @@ class Finder {
 
         if (this.samePathSignatureCount >= 2 && this.recalculateAttempts > 0) {
             this.pathVariantSeed += 1;
-            this.addTransientAvoidAtPlayer(3, 48, 2);
+            this.addTransientAvoidAtPlayer(3, 48, 2, true);
         }
     }
 
-    addTransientAvoidAtPlayer(radius = 2, penalty = 36, ttlSearches = 2) {
+    addTransientAvoidAtPlayer(radius = 2, penalty = 36, ttlSearches = 2, aggressive = false) {
         if (this.isFly) return;
         const player = Player.getPlayer();
         if (!player) return;
@@ -440,7 +441,10 @@ class Finder {
         const y = Math.floor(Player.getY());
         const z = Math.floor(Player.getZ());
 
-        Swift.addTransientAvoidPoint(x, y, z, 1, Math.max(8, penalty * 0.45), Math.max(1, ttlSearches));
+        const effectivePenalty = aggressive ? penalty * 1.5 : penalty;
+        const effectiveRadius = aggressive ? radius + 1 : radius;
+
+        Swift.addTransientAvoidPoint(x, y, z, 1, Math.max(8, effectivePenalty * 0.45), Math.max(1, ttlSearches));
 
         const yaw = Number(Player.getYaw()) || 0;
         const yawRad = ((yaw + 90) * Math.PI) / 180;
@@ -449,14 +453,23 @@ class Finder {
         if (fx === 0 && fz === 0) fx = 1;
 
         const cluster = [
-            [x + fx, y, z + fz, radius, penalty],
-            [x + fx * 2, y, z + fz * 2, radius, penalty * 1.15],
-            [x + fz, y, z - fx, Math.max(1, radius - 1), penalty * 0.7],
-            [x - fz, y, z + fx, Math.max(1, radius - 1), penalty * 0.7],
+            [x + fx, y, z + fz, effectiveRadius, effectivePenalty],
+            [x + fx * 2, y, z + fz * 2, effectiveRadius, effectivePenalty * 1.15],
+            [x + fz, y, z - fx, Math.max(1, effectiveRadius - 1), effectivePenalty * 0.7],
+            [x - fz, y, z + fx, Math.max(1, effectiveRadius - 1), effectivePenalty * 0.7],
         ];
 
+        if (aggressive) {
+            cluster.push(
+                [x + fx * 3, y, z + fz * 3, effectiveRadius, effectivePenalty * 1.3],
+                [x - fx, y, z - fz, Math.max(1, effectiveRadius - 1), effectivePenalty * 0.8],
+                [x, y, z + fz * 2, Math.max(1, effectiveRadius - 1), effectivePenalty * 0.9],
+                [x + fx * 2, y, z, Math.max(1, effectiveRadius - 1), effectivePenalty * 0.9]
+            );
+        }
+
         cluster.forEach((p) => {
-            Swift.addTransientAvoidPoint(p[0], p[1], p[2], Math.max(1, Math.floor(p[3])), Number(p[4]) || penalty, ttlSearches);
+            Swift.addTransientAvoidPoint(p[0], p[1], p[2], Math.max(1, Math.floor(p[3])), Number(p[4]) || effectivePenalty, ttlSearches);
         });
     }
 
