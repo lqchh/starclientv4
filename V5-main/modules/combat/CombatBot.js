@@ -1249,13 +1249,14 @@ class Combat extends ModuleBase {
         if (!playerMP) return null;
 
         try {
-            if (playerMP.canSeeEntity(target)) {
-                if (PathConfig.COMBAT_STRICT_LINE_OF_SIGHT) {
-                    if (this.checkRaytraceVisibility(target)) {
-                        this.recordVisibility(target);
-                        return true;
-                    }
-                } else {
+            if (PathConfig.COMBAT_STRICT_LINE_OF_SIGHT) {
+                if (this.checkRaytraceVisibility(target)) {
+                    this.recordVisibility(target);
+                    return true;
+                }
+                return false;
+            } else {
+                if (playerMP.canSeeEntity(target)) {
                     this.recordVisibility(target);
                     return true;
                 }
@@ -1270,25 +1271,33 @@ class Combat extends ModuleBase {
     checkRaytraceVisibility(target) {
         try {
             const player = Player.getPlayer();
-            if (!player) return true;
+            if (!player) return false;
 
             const eyePos = player.getEyePos();
-            if (!eyePos) return true;
+            if (!eyePos) return false;
 
             const hitboxCenter = Raytrace.getEntityHitboxCenter(target);
-            if (!hitboxCenter) return true;
+            if (!hitboxCenter) return false;
 
             const dx = hitboxCenter.x - eyePos.x;
             const dy = hitboxCenter.y - eyePos.y;
             const dz = hitboxCenter.z - eyePos.z;
             const distance = Math.hypot(dx, dy, dz);
 
-            if (distance > 8) return true;
+            if (distance > 12) return false;
 
             const isClear = Raytrace.isLineClear(eyePos.x, eyePos.y, eyePos.z, hitboxCenter.x, hitboxCenter.y, hitboxCenter.z);
+            
+            if (PathConfig.DEBUG_VISIBILITY_RAYTRACE) {
+                console.log(`[Combat] Raytrace check: distance=${distance.toFixed(2)}, isClear=${isClear}`);
+            }
+            
             return isClear;
         } catch (e) {
-            return true;
+            if (PathConfig.DEBUG_VISIBILITY_RAYTRACE) {
+                console.log(`[Combat] Raytrace error: ${e}`);
+            }
+            return false;
         }
     }
 
