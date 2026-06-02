@@ -36,13 +36,10 @@ const CRYPT_BOUNDS = {
 
 const NAMETAG_BODY_RADIUS = 3.5;
 
-const FILLER_NAMES = ['Crypt Ghoul', 'Golden Ghoul'];
-const MINIBOSS_NAMES = ['Revenant Sycophant', 'Revenant Champion', 'Deformed Revenant', 'Atoned Champion'];
-const BOSS_NAMES = ['Revenant Horror', 'Atoned Horror'];
-const ALL_TARGET_NAMES = [...FILLER_NAMES, ...MINIBOSS_NAMES, ...BOSS_NAMES];
+const CRYPT_GHOUL_NAMES = ['Crypt Ghoul'];
 
 const TARGET_CONFIG = {
-    names: ALL_TARGET_NAMES,
+    names: CRYPT_GHOUL_NAMES,
     checkVisibility: true,
     boundaryCheck: (x, y, z) => x >= CRYPT_BOUNDS.minX && x <= CRYPT_BOUNDS.maxX && y >= CRYPT_BOUNDS.minY && y <= CRYPT_BOUNDS.maxY && z >= CRYPT_BOUNDS.minZ && z <= CRYPT_BOUNDS.maxZ,
 };
@@ -320,12 +317,7 @@ class RevenantSlayer extends ModuleBase {
                 if (uuid && wrappedZombieIds.has(uuid)) return;
 
                 const name = this.cleanName(entity.getName?.());
-                if (name && this.matchesTargetName(name)) {
-                    targets.push(entity);
-                    return;
-                }
-
-                if (!this.isLikelyCryptZombie(entity)) return;
+                if (!this.matchesTargetName(name)) return;
                 targets.push(entity);
             } catch (e) {
                 console.error('V5 Caught error' + e + e.stack);
@@ -401,9 +393,7 @@ class RevenantSlayer extends ModuleBase {
 
     configureCombatBot() {
         CombatBot.setTargetPriorityRules([
-            { names: BOSS_NAMES, priority: 5 },
-            { names: MINIBOSS_NAMES, priority: 3 },
-            { names: FILLER_NAMES, priority: 1 },
+            { names: CRYPT_GHOUL_NAMES, priority: 1 },
         ]);
     }
 
@@ -549,7 +539,7 @@ class RevenantSlayer extends ModuleBase {
 
     isBossActive() {
         if (Date.now() - this.lastBossSeenAt < 7000) return true;
-        return this.findRevenantTargets().some((target) => this.matchesBossName(this.cleanName(target.getName?.())));
+        return false;
     }
 
     isInHubArea() {
@@ -612,28 +602,7 @@ class RevenantSlayer extends ModuleBase {
 
     matchesTargetName(name) {
         const lower = String(name || '').toLowerCase();
-        return ALL_TARGET_NAMES.some((targetName) => lower.includes(targetName.toLowerCase()));
-    }
-
-    matchesBossName(name) {
-        const lower = String(name || '').toLowerCase();
-        return BOSS_NAMES.some((targetName) => lower.includes(targetName.toLowerCase()));
-    }
-
-    isLikelyCryptZombie(entity) {
-        try {
-            if (!entity || entity.isDead?.()) return false;
-            if (!TARGET_CONFIG.boundaryCheck(entity.getX(), entity.getY(), entity.getZ())) return false;
-
-            const name = this.cleanName(entity.getName?.()).toLowerCase();
-            if (name && name !== 'zombie' && name !== 'zombie villager') {
-                return this.matchesTargetName(name);
-            }
-
-            return this.isInHubArea() && this.isNearCrypts();
-        } catch (e) {
-            return false;
-        }
+        return CRYPT_GHOUL_NAMES.some((targetName) => lower.includes(targetName.toLowerCase()));
     }
 
     getEntityUuid(entity) {
