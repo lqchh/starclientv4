@@ -4,6 +4,7 @@ import { ModuleBase } from '../../utils/ModuleBase';
 import { Utils } from '../../utils/Utils';
 import { ServerInfo } from '../../utils/player/ServerInfo';
 import { OverlayManager } from '../../gui/OverlayUtils';
+import { MacroCpsTracker } from '../../utils/player/MacroCpsTracker';
 
 class HUD extends ModuleBase {
     constructor() {
@@ -21,7 +22,7 @@ class HUD extends ModuleBase {
 
         this.addToggle('Stats Hud', (v) => (this.STATS_HUD = !!v), 'Shows FPS, TPS, Ping etc.', true);
         this.addToggle('Inventory Hud', (v) => (this.INVENTORY_HUD = !!v), 'Turns on the inventory Hud', true);
-        this.addDirectToggle('CPS Counter', (v) => (this.CPS_COUNTER = !!v), 'Shows left and right clicks per second.', true, 'HUD');
+        this.addDirectToggle('CPS Counter', (v) => (this.CPS_COUNTER = !!v), 'Shows macro-generated left and right clicks per second.', true, 'HUD');
 
         this.positionConfig = Utils.getConfigFile('OverlayPositions/hud_positions.json') || {};
         this.stats = this.loadOverlayState('stats', { x: 10, y: 10, scale: 1.0 });
@@ -135,12 +136,9 @@ class HUD extends ModuleBase {
     }
 
     getCpsLines() {
-        const left = typeof CPS !== 'undefined' && CPS.getLeftClicks ? CPS.getLeftClicks() : 0;
-        const right = typeof CPS !== 'undefined' && CPS.getRightClicks ? CPS.getRightClicks() : 0;
-
         return [
-            { label: 'LMB', value: String(left), color: 0xffffffff },
-            { label: 'RMB', value: String(right), color: 0xffffffff },
+            { label: 'LMB', value: String(MacroCpsTracker.getLeft()), color: 0xffffffff },
+            { label: 'RMB', value: String(MacroCpsTracker.getRight()), color: 0xffffffff },
         ];
     }
 

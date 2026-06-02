@@ -2,6 +2,7 @@ import { BP, BlockHitResult, Direction, MCHand, Vec3d } from '../Constants';
 import { PlayerInteractBlockC2S } from '../Packets';
 import { ScheduleTask } from '../ScheduleTask';
 import { Utils, mc } from '../Utils';
+import { MacroCpsTracker } from './MacroCpsTracker';
 
 const LEFT_CLICK_METHOD = mc.getClass().getDeclaredMethod('method_1536');
 const RIGHT_CLICK_METHOD = mc.getClass().getDeclaredMethod('method_1583');
@@ -21,6 +22,7 @@ class ControlSystem {
         if (this.isGuiOpen()) return;
         ScheduleTask(() => {
             LEFT_CLICK_METHOD.invoke(mc);
+            MacroCpsTracker.record('left');
         });
     }
 
@@ -28,6 +30,7 @@ class ControlSystem {
         if (this.isGuiOpen()) return;
         ScheduleTask(() => {
             RIGHT_CLICK_METHOD.invoke(mc);
+            MacroCpsTracker.record('right');
         });
     }
 
@@ -38,6 +41,7 @@ class ControlSystem {
         const hitResult = new BlockHitResult(new Vec3d(x + 0.5, y + 0.5, z + 0.5), Direction.UP, bp, false);
         const action = () => {
             Client.sendPacket(new PlayerInteractBlockC2S(MCHand.MAIN_HAND, hitResult, 0));
+            MacroCpsTracker.record('right');
         };
 
         if (!delay || delay <= 0) action();

@@ -2,6 +2,7 @@ import { Chat } from '../Chat';
 import { CloseHandledScreenC2S } from '../Packets';
 import { ScheduleTask } from '../ScheduleTask';
 import { Keybind } from './Keybinding';
+import { MacroCpsTracker } from './MacroCpsTracker';
 import { Rotations } from './Rotations';
 
 class ItemSearcher {
@@ -71,6 +72,7 @@ class InterfaceHandler {
         }
 
         container.click(slot, shift, button);
+        MacroCpsTracker.record(button);
         return true;
     }
 

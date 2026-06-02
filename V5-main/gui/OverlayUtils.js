@@ -16,6 +16,7 @@ import {
 } from './Utils';
 import { GuiState, Overlays } from './core/GuiState';
 import { ServerInfo } from '../utils/player/ServerInfo';
+import { MacroCpsTracker } from '../utils/player/MacroCpsTracker';
 
 const { loadSettings } = require('./GuiSave');
 
@@ -1089,11 +1090,9 @@ class OverlayUtils {
     }
 
     getHudCpsLines() {
-        const left = typeof CPS !== 'undefined' && CPS.getLeftClicks ? CPS.getLeftClicks() : 0;
-        const right = typeof CPS !== 'undefined' && CPS.getRightClicks ? CPS.getRightClicks() : 0;
         return [
-            { label: 'LMB', value: String(left), color: 0xffffffff },
-            { label: 'RMB', value: String(right), color: 0xffffffff },
+            { label: 'LMB', value: String(MacroCpsTracker.getLeft()), color: 0xffffffff },
+            { label: 'RMB', value: String(MacroCpsTracker.getRight()), color: 0xffffffff },
         ];
     }
 
