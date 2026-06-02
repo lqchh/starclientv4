@@ -63,6 +63,120 @@ export class Timer {
     }
 }
 
+const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
+const randomBetween = (min, max) => min + Math.random() * (max - min);
+const randomInt = (min, max) => Math.floor(randomBetween(min, max + 1));
+
+export class HumanizedCpsTimer {
+    constructor(options = {}) {
+        this.jitter = options.jitter ?? 0.16;
+        this.intervalBias = options.intervalBias ?? 0.94;
+        this.pauseEveryMin = options.pauseEveryMin ?? 9;
+        this.pauseEveryMax = options.pauseEveryMax ?? 20;
+        this.minPauseMs = options.minPauseMs ?? 45;
+        this.maxPauseMs = options.maxPauseMs ?? 140;
+        this.minIntervalScale = options.minIntervalScale ?? 0.72;
+        this.maxIntervalScale = options.maxIntervalScale ?? 1.45;
+        this.nextClickAt = 0;
+        this.clicksUntilPause = this.nextBurstLength();
+    }
+
+    nextBurstLength() {
+        return randomInt(this.pauseEveryMin, this.pauseEveryMax);
+    }
+
+    reset(ready = true) {
+        this.nextClickAt = ready ? 0 : Date.now();
+        this.clicksUntilPause = this.nextBurstLength();
+    }
+
+    getNextInterval(targetCps) {
+        const cps = clamp(Number(targetCps) || 1, 1, 30);
+        const baseInterval = 1000 / cps;
+        const triangularJitter = (Math.random() + Math.random() - 1) * this.jitter;
+        let interval = baseInterval * this.intervalBias * (1 + triangularJitter);
+
+        this.clicksUntilPause--;
+        if (this.clicksUntilPause <= 0) {
+            interval += randomBetween(this.minPauseMs, this.maxPauseMs);
+            this.clicksUntilPause = this.nextBurstLength();
+        } else if (Math.random() < 0.025) {
+            interval += randomBetween(20, 65);
+        }
+
+        return clamp(interval, baseInterval * this.minIntervalScale, baseInterval * this.maxIntervalScale + this.maxPauseMs);
+    }
+
+    canClick(now = Date.now()) {
+        return now >= this.nextClickAt;
+    }
+
+    markClick(targetCps, now = Date.now()) {
+        this.nextClickAt = now + this.getNextInterval(targetCps);
+    }
+
+    tryClick(targetCps, now = Date.now()) {
+        if (!this.canClick(now)) return false;
+        this.markClick(targetCps, now);
+        return true;
+    }
+}
+
+export class HumanizedDelayTimer {
+    constructor(options = {}) {
+        this.jitter = options.jitter ?? 0.14;
+        this.pauseEveryMin = options.pauseEveryMin ?? 7;
+        this.pauseEveryMax = options.pauseEveryMax ?? 16;
+        this.minPauseMs = options.minPauseMs ?? 35;
+        this.maxPauseMs = options.maxPauseMs ?? 130;
+        this.minDelayScale = options.minDelayScale ?? 0.75;
+        this.maxDelayScale = options.maxDelayScale ?? 1.4;
+        this.nextActionAt = 0;
+        this.actionsUntilPause = this.nextBurstLength();
+    }
+
+    nextBurstLength() {
+        return randomInt(this.pauseEveryMin, this.pauseEveryMax);
+    }
+
+    reset(ready = true) {
+        this.nextActionAt = ready ? 0 : Date.now();
+        this.actionsUntilPause = this.nextBurstLength();
+    }
+
+    getNextDelay(targetDelayMs) {
+        const baseDelay = Math.max(Number(targetDelayMs) || 0, 0);
+        if (baseDelay <= 0) return 0;
+
+        const triangularJitter = (Math.random() + Math.random() - 1) * this.jitter;
+        let delay = baseDelay * (1 + triangularJitter);
+
+        this.actionsUntilPause--;
+        if (this.actionsUntilPause <= 0) {
+            delay += randomBetween(this.minPauseMs, this.maxPauseMs);
+            this.actionsUntilPause = this.nextBurstLength();
+        } else if (Math.random() < 0.03) {
+            delay += randomBetween(15, 55);
+        }
+
+        return clamp(delay, baseDelay * this.minDelayScale, baseDelay * this.maxDelayScale + this.maxPauseMs);
+    }
+
+    canAct(now = Date.now()) {
+        return now >= this.nextActionAt;
+    }
+
+    markAction(targetDelayMs, now = Date.now()) {
+        this.nextActionAt = now + this.getNextDelay(targetDelayMs);
+    }
+
+    tryAction(targetDelayMs, now = Date.now()) {
+        if (!this.canAct(now)) return false;
+        this.markAction(targetDelayMs, now);
+        return true;
+    }
+}
+
 export const TimeUtils = {
     /**
      * Formats a duration in ms into the good looking string

@@ -2,6 +2,7 @@ import { ArmorStandEntity, Vec3d } from '../../utils/Constants';
 import { ModuleBase } from '../../utils/ModuleBase';
 import { Guis } from '../../utils/player/Inventory';
 import Render from '../../utils/render/Render';
+import { HumanizedDelayTimer } from '../../utils/TimeUtils';
 
 const COOKIE_SLOT = 13;
 const MAX_TRACKED_EGGS = 6;
@@ -88,6 +89,7 @@ class ChocolateFactory extends ModuleBase {
         this.eggEsp = false;
 
         this.lastActionAt = 0;
+        this.actionTimer = new HumanizedDelayTimer();
         this.detectedEggs = new Map();
 
         this.addToggle('Auto Click', (value) => (this.clickFactory = !!value), 'Right clicks the chocolate cookie while the factory menu is open.', false);
@@ -119,6 +121,7 @@ class ChocolateFactory extends ModuleBase {
 
     onEnable() {
         this.lastActionAt = 0;
+        this.actionTimer.reset();
         this.scanEggs();
     }
 
@@ -128,6 +131,7 @@ class ChocolateFactory extends ModuleBase {
 
     resetState() {
         this.lastActionAt = 0;
+        this.actionTimer.reset();
         this.detectedEggs.clear();
     }
 
@@ -137,7 +141,7 @@ class ChocolateFactory extends ModuleBase {
         if (Guis.guiName() !== 'Chocolate Factory') return;
 
         const now = Date.now();
-        if ((this.clickFactory || this.claimStrays) && now - this.lastActionAt >= this.actionDelayMs) {
+        if ((this.clickFactory || this.claimStrays) && this.actionTimer.tryAction(this.actionDelayMs, now)) {
             this.performFactoryActions(container);
             this.lastActionAt = now;
         }

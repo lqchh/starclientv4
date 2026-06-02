@@ -1,6 +1,7 @@
 import { ModuleBase } from '../../utils/ModuleBase';
 import { Guis } from '../../utils/player/Inventory';
 import { Keybind } from '../../utils/player/Keybinding';
+import { HumanizedDelayTimer } from '../../utils/TimeUtils';
 
 /**
  * @typedef {com.chattriggers.ctjs.api.inventory.Item} item
@@ -49,7 +50,7 @@ class AutoExperiments extends ModuleBase {
         this.ultraPatternCaptured = false;
         this.clicks = 0;
         this.lastSlot49Item = null;
-        this.lastClickTime = 0;
+        this.clickTimer = new HumanizedDelayTimer();
         this.reopeningStarted = false;
         this.buyXpTargetLevel = 0;
         this.boughtXP = false;
@@ -125,7 +126,7 @@ class AutoExperiments extends ModuleBase {
         if (newState === this.state) return;
 
         this.state = newState;
-        this.lastClickTime = Date.now();
+        this.clickTimer.markAction(this.actionDelay);
 
         switch (newState) {
             case STATES.CHRONOMATRON:
@@ -310,7 +311,7 @@ class AutoExperiments extends ModuleBase {
 
     startReopenSequence() {
         this.reopeningStarted = false;
-        this.lastClickTime = Date.now();
+        this.clickTimer.markAction(this.actionDelay);
         this.state = STATES.REOPENING;
     }
 
@@ -320,7 +321,7 @@ class AutoExperiments extends ModuleBase {
         if (!this.reopeningStarted) {
             Guis.closeInv();
             this.reopeningStarted = true;
-            this.lastClickTime = Date.now();
+            this.clickTimer.markAction(this.actionDelay);
         } else {
             this.message('&aReopening Experimentation Table...');
             Keybind.rightClick();
@@ -329,7 +330,7 @@ class AutoExperiments extends ModuleBase {
             this.ultraPatternCaptured = false;
             this.clicks = 0;
             this.lastSlot49Item = null;
-            this.lastClickTime = Date.now();
+            this.clickTimer.markAction(this.actionDelay);
             this.state = STATES.WAITING;
         }
     }
@@ -444,14 +445,14 @@ class AutoExperiments extends ModuleBase {
 
     clickSlot(slot, clickType = 'MIDDLE') {
         if (Guis.clickSlot(slot, false, clickType)) {
-            this.lastClickTime = Date.now();
+            this.clickTimer.markAction(this.actionDelay);
             return true;
         }
         return false;
     }
 
     canClick() {
-        return Date.now() - this.lastClickTime >= this.actionDelay;
+        return this.clickTimer.canAct();
     }
 
     isStakeSelection(game, containerName) {
@@ -508,7 +509,7 @@ class AutoExperiments extends ModuleBase {
         this.ultraPatternCaptured = false;
         this.clicks = 0;
         this.lastSlot49Item = null;
-        this.lastClickTime = Date.now();
+        this.clickTimer.markAction(this.actionDelay);
         this.buyXpTargetLevel = 0;
         this.boughtXP = false;
         this.state = STATES.WAITING;

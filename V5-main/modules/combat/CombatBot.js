@@ -6,6 +6,7 @@ import { Keybind } from '../../utils/player/Keybinding';
 import { Rotations } from '../../utils/player/Rotations';
 import { Raytrace } from '../../utils/Raytrace';
 import Render from '../../utils/render/Render';
+import { HumanizedCpsTimer } from '../../utils/TimeUtils';
 
 const BLACKHOLE_TEXTURES = new Set([
     'ewogICJ0aW1lc3RhbXAiIDogMTczNjE4NDg2Nzc3MywKICAicHJvZmlsZUlkIiA6ICJjNmViMzdjNmE4YjM0MDI3OGJjN2FmZGE3ZjMxOWJmMyIsCiAgInByb2ZpbGVOYW1lIiA6ICJFbFJleUNhbGFiYXphbCIsCiAgInNpZ25hdHVyZVJlcXVpcmVkIiA6IHRydWUsCiAgInRleHR1cmVzIiA6IHsKICAgICJTS0lOIiA6IHsKICAgICAgInVybCIgOiAiaHR0cDovL3RleHR1cmVzLm1pbmVjcmFmdC5uZXQvdGV4dHVyZS81NWI3MGYwOTRlMDE2Nzk1MDhkZDViY2EzOTY0MGVkOWVjNWM2YzY3OTJmYmQ4ZjU3YzAzYjNhMTJmOWMwYTkyIiwKICAgICAgIm1ldGFkYXRhIiA6IHsKICAgICAgICAibW9kZWwiIDogInNsaW0iCiAgICAgIH0KICAgIH0KICB9Cn0=',
@@ -97,7 +98,7 @@ class Combat extends ModuleBase {
         this.pathfindingThreshold = 15;
         this.attackCPS = 10;
 
-        this.lastAttackTime = 0;
+        this.attackTimer = new HumanizedCpsTimer();
         this.isPathing = false;
         this.lastPathTarget = null;
         this.pathTargetMoveThreshold = 3;
@@ -894,17 +895,15 @@ class Combat extends ModuleBase {
 
     performComboAttack() {
         Keybind.leftClick();
-        setTimeout(() => Keybind.leftClick(), 50);
+        setTimeout(() => Keybind.leftClick(), Math.floor(35 + Math.random() * 45));
     }
 
     tryAttack() {
         const now = Date.now();
-        const cooldown = 1000 / this.attackCPS;
-        if (now - this.lastAttackTime < cooldown) return;
+        if (!this.attackTimer.tryClick(this.attackCPS, now)) return;
 
         if (this.shouldComboAttack()) {
             this.performComboAttack();
-            this.lastAttackTime = now;
             return;
         }
 
@@ -914,7 +913,6 @@ class Combat extends ModuleBase {
         }
 
         Keybind.leftClick();
-        this.lastAttackTime = now;
     }
 
     isTargetInvalid(target) {
@@ -1306,6 +1304,7 @@ class Combat extends ModuleBase {
         }
 
         this.activeBlackholes = [];
+        this.attackTimer.reset();
     }
 
     onDisable() {
@@ -1317,7 +1316,7 @@ class Combat extends ModuleBase {
         this.target = null;
         this.setState(COMBAT_STATE.IDLE, true);
         this.lastPathTarget = null;
-        this.lastAttackTime = 0;
+        this.attackTimer.reset();
         this.blacklistedTargets.clear();
         this.failedPathCallbacks.clear();
         this.activeBlackholes = [];

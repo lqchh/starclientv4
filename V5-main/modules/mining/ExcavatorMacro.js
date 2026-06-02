@@ -308,8 +308,19 @@ class ExcavatorMacro extends ModuleBase {
             return false;
         }
 
-        this.tickCount = this.TICKDELAY;
+        this.tickCount = this.nextClickDelayTicks();
         return true;
+    }
+
+    nextClickDelayTicks() {
+        const baseDelay = Math.max(Math.floor(this.TICKDELAY) || 0, 0);
+        if (baseDelay <= 1) return baseDelay;
+
+        let delay = baseDelay;
+        if (Math.random() < 0.45) delay += Math.random() < 0.5 ? -1 : 1;
+        if (Math.random() < 0.12) delay += 1 + Math.floor(Math.random() * 3);
+
+        return Math.max(1, delay);
     }
 
     onEnable() {

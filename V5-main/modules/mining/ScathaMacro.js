@@ -7,6 +7,7 @@ import { manager } from '../../utils/SkyblockEvents';
 import { MiningUtils } from '../../utils/MiningUtils';
 import Pathfinder from '../../utils/pathfinder/PathFinder';
 import { Rotations } from '../../utils/player/Rotations';
+import { HumanizedDelayTimer } from '../../utils/TimeUtils';
 
 //todo
 // find the best possible place to pathfind to
@@ -85,7 +86,7 @@ class ScathaMacro extends ModuleBase {
         this.handleAOTV = { rotated: false, usedAOTV: false };
         this.HOTMState = { opened: false, switchedPage: false };
         this.actionQueue = [];
-        this.lastActionTime = 0;
+        this.clickTimer = new HumanizedDelayTimer();
 
         this.CHBounds = {
             minX: 202,
@@ -201,7 +202,7 @@ class ScathaMacro extends ModuleBase {
         if (!this.HOTMState.completed) {
             if (this.togglePerks(false)) {
                 this.HOTMState = { opened: false, switchedPage: false, completed: true };
-                this.lastActionTime = Date.now();
+                this.clickTimer.markAction(this.CLICK_DELAY);
                 ChatLib.command('wardrobe');
             }
             return;
@@ -263,13 +264,13 @@ class ScathaMacro extends ModuleBase {
             if (!this.HOTMState.opened) {
                 ChatLib.command('hotm');
                 this.HOTMState.opened = true;
-                this.lastActionTime = Date.now();
+                this.clickTimer.markAction(this.CLICK_DELAY);
             }
             return;
         }
 
         const now = Date.now();
-        if (now - this.lastActionTime < this.CLICK_DELAY) return;
+        if (!this.clickTimer.canAct(now)) return;
 
         const ignoreID = 'minecraft:redstone_block';
         const isPageOne = container.getStackInSlot(0)?.getName()?.includes('Tier 5');
@@ -283,7 +284,7 @@ class ScathaMacro extends ModuleBase {
 
             if (slot === 8) {
                 Guis.clickSlot(slot, false, 'RIGHT');
-                this.lastActionTime = now;
+                this.clickTimer.markAction(this.CLICK_DELAY, now);
                 return false;
             }
 
@@ -293,7 +294,7 @@ class ScathaMacro extends ModuleBase {
 
             if (shouldClick) {
                 Guis.clickSlot(slot, false, 'RIGHT');
-                this.lastActionTime = now;
+                this.clickTimer.markAction(this.CLICK_DELAY, now);
                 return false;
             }
         }
@@ -313,7 +314,7 @@ class ScathaMacro extends ModuleBase {
         if (!container) return false;
 
         const now = Date.now();
-        if (now - this.lastActionTime < this.CLICK_DELAY) return false;
+        if (!this.clickTimer.canAct(now)) return false;
 
         const slotsToCheck = [36, 37, 38, 39, 40, 41, 42, 43];
 
@@ -325,7 +326,7 @@ class ScathaMacro extends ModuleBase {
 
             if (itemID.includes('lime_dye')) {
                 Guis.clickSlot(slot, false, 'LEFT');
-                this.lastActionTime = now;
+                this.clickTimer.markAction(this.CLICK_DELAY, now);
                 return false;
             }
         }
@@ -337,7 +338,7 @@ class ScathaMacro extends ModuleBase {
         if (Guis.guiName() !== 'Wardrobe (1/3)') return false;
 
         const now = Date.now();
-        if (now - this.lastActionTime < this.CLICK_DELAY) return false;
+        if (!this.clickTimer.canAct(now)) return false;
 
         const targetSlot = slot + 35;
 
@@ -350,12 +351,12 @@ class ScathaMacro extends ModuleBase {
         const itemID = item.type.getRegistryName().toString();
 
         if (itemID.includes('lime_dye')) {
-            this.lastActionTime = now;
+            this.clickTimer.markAction(this.CLICK_DELAY, now);
             return true;
         }
 
         Guis.clickSlot(targetSlot, false, 'LEFT');
-        this.lastActionTime = now;
+        this.clickTimer.markAction(this.CLICK_DELAY, now);
         return true;
     }
 
@@ -443,7 +444,7 @@ class ScathaMacro extends ModuleBase {
         this.HOTMState = { opened: false, switchedPage: false };
 
         this.actionQueue = [];
-        this.lastActionTime = 0;
+        this.clickTimer.reset();
         Keybind.setKey('leftclick', false);
     }
 }
