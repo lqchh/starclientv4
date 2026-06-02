@@ -394,6 +394,11 @@ class Combat extends ModuleBase {
         }
 
         if (visible) {
+            if (PathConfig.COMBAT_STRICT_LINE_OF_SIGHT) {
+                if (!this.checkRaytraceVisibility(entity)) {
+                    return false;
+                }
+            }
             this.recordVisibility(entity);
             return true;
         }
@@ -775,6 +780,17 @@ class Combat extends ModuleBase {
             this.target = null;
             this.setState(COMBAT_STATE.IDLE);
             return;
+        }
+
+        if (PathConfig.COMBAT_STRICT_LINE_OF_SIGHT && this.target) {
+            if (!this.checkRaytraceVisibility(this.target)) {
+                if (PathConfig.DEBUG_VISIBILITY_RAYTRACE) {
+                    console.log('[Combat] Skipping path to target behind wall');
+                }
+                this.target = null;
+                this.setState(COMBAT_STATE.IDLE);
+                return;
+            }
         }
 
         const predictedPos = this.predictTargetPosition(this.target, 20);
