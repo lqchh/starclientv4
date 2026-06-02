@@ -43,6 +43,7 @@ class OverlayUtils {
         this.hudSettings = {
             stats: { x: 10, y: 10, scale: 1.0 },
             inventory: { x: 50, y: 100, scale: 1.0 },
+            cps: { x: 10, y: 34, scale: 1.0 },
         };
         this.musicSettings = {
             x: 100,
@@ -50,7 +51,7 @@ class OverlayUtils {
             scale: 1.0,
         };
 
-        this.editorOrder = ['default', 'scheduler', 'hudInventory', 'hudStats', 'music'];
+        this.editorOrder = ['default', 'scheduler', 'hudInventory', 'hudStats', 'hudCps', 'music'];
         this.editorBoxes = {};
 
         this.startTimes = {};
@@ -469,6 +470,13 @@ class OverlayUtils {
                 return;
             }
 
+            if (target === 'hudCps') {
+                this.hudSettings.cps.scale = Math.max(0.5, Math.min(3.0, this.hudSettings.cps.scale + (dir > 0 ? 0.1 : -0.1)));
+                this.pendingSave = true;
+                this.saveSettings();
+                return;
+            }
+
             if (target === 'music') {
                 this.musicSettings.scale = Math.max(0.5, Math.min(3.0, (this.musicSettings.scale || 1.0) + (dir > 0 ? 0.1 : -0.1)));
                 this.pendingSave = true;
@@ -483,6 +491,7 @@ class OverlayUtils {
         if (target === 'scheduler') return this.schedulerSettings;
         if (target === 'hudStats') return this.hudSettings.stats;
         if (target === 'hudInventory') return this.hudSettings.inventory;
+        if (target === 'hudCps') return this.hudSettings.cps;
         if (target === 'music') return this.musicSettings;
         return null;
     }
@@ -717,6 +726,11 @@ class OverlayUtils {
                     return;
                 }
 
+                if (target === 'hudCps') {
+                    this.editorBoxes.hudCps = this.drawHudCpsPreview(sw, sh);
+                    return;
+                }
+
                 if (target === 'music') {
                     this.editorBoxes.music = this.drawMusicPreview(sw, sh);
                 }
@@ -813,6 +827,14 @@ class OverlayUtils {
                     x: hudData.inventory.x,
                     y: hudData.inventory.y,
                     scale: typeof hudData.inventory.scale === 'number' ? hudData.inventory.scale : 1.0,
+                };
+            }
+
+            if (hudData.cps && typeof hudData.cps.x === 'number') {
+                this.hudSettings.cps = {
+                    x: hudData.cps.x,
+                    y: hudData.cps.y,
+                    scale: typeof hudData.cps.scale === 'number' ? hudData.cps.scale : 1.0,
                 };
             }
         }
@@ -925,6 +947,62 @@ class OverlayUtils {
         return { x: clamped.x, y: clamped.y, width, height };
     }
 
+    drawHudCpsPreview(sw, sh) {
+        const s = this.hudSettings.cps.scale;
+        const pad = 6 * s;
+        const fontSize = FontSizes.MEDIUM * 1.25 * s;
+        const lines = this.getHudCpsLines();
+        const separator = ' | ';
+        const separatorWidth = getTextWidth(separator, fontSize);
+        const gap = 3 * s;
+        let totalWidth = 0;
+
+        lines.forEach((l, index) => {
+            totalWidth += getTextWidth(`${l.label}:`, fontSize) + gap + getTextWidth(String(l.value), fontSize);
+            if (index < lines.length - 1) totalWidth += separatorWidth;
+        });
+
+        const width = pad * 2 + totalWidth;
+        const height = pad * 2 + fontSize;
+
+        const clamped = this.clampToScreen(this.hudSettings.cps.x, this.hudSettings.cps.y, width, height, sw, sh);
+        this.hudSettings.cps.x = clamped.x;
+        this.hudSettings.cps.y = clamped.y;
+
+        const bg = colorWithAlpha(THEME.OV_WINDOW, 0.92);
+        const border = colorWithAlpha(THEME.OV_ACCENT, 0.35);
+        drawRoundedRectangleWithBorder({
+            x: clamped.x,
+            y: clamped.y,
+            width,
+            height,
+            radius: CORNER_RADIUS * 0.6 * s,
+            color: bg,
+            borderWidth: BORDER_WIDTH * s,
+            borderColor: border,
+        });
+
+        const labelColor = colorWithAlpha(0xffffff, 0.7);
+        const separatorColor = colorWithAlpha(0xffffff, 0.4);
+        const centerY = clamped.y + height / 2;
+        let x = clamped.x + pad;
+
+        lines.forEach((l, index) => {
+            drawText(`${l.label}:`, x, centerY, fontSize, labelColor, 17);
+            x += getTextWidth(`${l.label}:`, fontSize) + gap;
+
+            drawText(String(l.value), x, centerY, fontSize, l.color, 17);
+            x += getTextWidth(String(l.value), fontSize);
+
+            if (index < lines.length - 1) {
+                drawText(separator, x, centerY, fontSize, separatorColor, 17);
+                x += separatorWidth;
+            }
+        });
+
+        return { x: clamped.x, y: clamped.y, width, height };
+    }
+
     drawMusicPreview(sw, sh) {
         const s = this.musicSettings.scale || 1.0;
         const songName = 'Searching for Media...';
@@ -1007,6 +1085,15 @@ class OverlayUtils {
             { label: 'FPS', value: String(fps), color: 0xffffffff },
             { label: 'Ping', value: `${ping}ms`, color: (0xff000000 | ServerInfo.getPingColor(ping)) >>> 0 },
             { label: 'TPS', value: tps.toFixed(2), color: (0xff000000 | ServerInfo.getTpsColor(tps)) >>> 0 },
+        ];
+    }
+
+    getHudCpsLines() {
+        const left = typeof CPS !== 'undefined' && CPS.getLeftClicks ? CPS.getLeftClicks() : 0;
+        const right = typeof CPS !== 'undefined' && CPS.getRightClicks ? CPS.getRightClicks() : 0;
+        return [
+            { label: 'LMB', value: String(left), color: 0xffffffff },
+            { label: 'RMB', value: String(right), color: 0xffffffff },
         ];
     }
 

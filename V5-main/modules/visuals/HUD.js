@@ -17,16 +17,19 @@ class HUD extends ModuleBase {
 
         this.STATS_HUD = true;
         this.INVENTORY_HUD = true;
+        this.CPS_COUNTER = true;
 
         this.addToggle('Stats Hud', (v) => (this.STATS_HUD = !!v), 'Shows FPS, TPS, Ping etc.', true);
         this.addToggle('Inventory Hud', (v) => (this.INVENTORY_HUD = !!v), 'Turns on the inventory Hud', true);
+        this.addDirectToggle('CPS Counter', (v) => (this.CPS_COUNTER = !!v), 'Shows left and right clicks per second.', true, 'HUD');
 
         this.positionConfig = Utils.getConfigFile('OverlayPositions/hud_positions.json') || {};
         this.stats = this.loadOverlayState('stats', { x: 10, y: 10, scale: 1.0 });
         this.inventory = this.loadOverlayState('inventory', { x: 50, y: 100, scale: 1.0 });
+        this.cps = this.loadOverlayState('cps', { x: 10, y: 34, scale: 1.0 });
 
         this.when(
-            () => this.STATS_HUD || this.INVENTORY_HUD,
+            () => this.STATS_HUD || this.INVENTORY_HUD || this.CPS_COUNTER,
             'renderOverlay',
             () => this.renderOverlay()
         );
@@ -83,6 +86,10 @@ class HUD extends ModuleBase {
             this.applyOverlayState(this.inventory, latest.inventory);
         }
 
+        if (latest.cps && typeof latest.cps === 'object') {
+            this.applyOverlayState(this.cps, latest.cps);
+        }
+
         this.positionConfig = latest;
     }
 
@@ -91,6 +98,7 @@ class HUD extends ModuleBase {
         this.positionConfig = {
             stats: this.getSaveData(this.stats),
             inventory: this.getSaveData(this.inventory),
+            cps: this.getSaveData(this.cps),
         };
         Utils.writeConfigFile('OverlayPositions/hud_positions.json', this.positionConfig);
     }
@@ -126,6 +134,16 @@ class HUD extends ModuleBase {
         ];
     }
 
+    getCpsLines() {
+        const left = typeof CPS !== 'undefined' && CPS.getLeftClicks ? CPS.getLeftClicks() : 0;
+        const right = typeof CPS !== 'undefined' && CPS.getRightClicks ? CPS.getRightClicks() : 0;
+
+        return [
+            { label: 'LMB', value: String(left), color: 0xffffffff },
+            { label: 'RMB', value: String(right), color: 0xffffffff },
+        ];
+    }
+
     recalcStatsBounds() {
         const o = this.stats;
         const s = o.scale;
@@ -155,6 +173,28 @@ class HUD extends ModuleBase {
         this.clampOverlayToScreen(o);
     }
 
+    recalcCpsBounds() {
+        const o = this.cps;
+        const s = o.scale;
+        const pad = 6 * s;
+        const fontSize = FontSizes.MEDIUM * 1.25 * s;
+        const separator = ' | ';
+        const separatorWidth = getTextWidth(separator, fontSize);
+        const gap = 3 * s;
+        const lines = this.getCpsLines();
+        let totalWidth = 0;
+
+        lines.forEach((l, index) => {
+            totalWidth += getTextWidth(`${l.label}:`, fontSize) + gap + getTextWidth(String(l.value), fontSize);
+            if (index < lines.length - 1) totalWidth += separatorWidth;
+        });
+
+        o.width = pad * 2 + totalWidth;
+        o.height = pad * 2 + fontSize;
+
+        this.clampOverlayToScreen(o);
+    }
+
     recalcInventoryBounds() {
         const o = this.inventory;
         const s = o.scale;
@@ -175,6 +215,7 @@ class HUD extends ModuleBase {
     recalcAllBounds() {
         if (this.STATS_HUD) this.recalcStatsBounds();
         if (this.INVENTORY_HUD) this.recalcInventoryBounds();
+        if (this.CPS_COUNTER) this.recalcCpsBounds();
     }
 
     drawStatsHud() {
@@ -207,6 +248,50 @@ class HUD extends ModuleBase {
         const separator = ' | ';
         const separatorWidth = getTextWidth(separator, fontSize);
         const gap = 3 * s;
+
+        lines.forEach((l, index) => {
+            drawText(`${l.label}:`, x, centerY, fontSize, labelColor, 17);
+            x += getTextWidth(`${l.label}:`, fontSize) + gap;
+
+            drawText(String(l.value), x, centerY, fontSize, l.color, 17);
+            x += getTextWidth(String(l.value), fontSize);
+
+            if (index < lines.length - 1) {
+                drawText(separator, x, centerY, fontSize, separatorColor, 17);
+                x += separatorWidth;
+            }
+        });
+    }
+
+    drawCpsCounter() {
+        const o = this.cps;
+        const s = o.scale;
+        const pad = 6 * s;
+        const fontSize = FontSizes.MEDIUM * 1.25 * s;
+
+        const bg = colorWithAlpha(THEME.OV_WINDOW, 0.92);
+        const border = colorWithAlpha(THEME.OV_ACCENT, 0.35);
+
+        drawRoundedRectangleWithBorder({
+            x: o.x,
+            y: o.y,
+            width: o.width,
+            height: o.height,
+            radius: CORNER_RADIUS * 0.6 * s,
+            color: bg,
+            borderWidth: BORDER_WIDTH * s,
+            borderColor: border,
+        });
+
+        const labelColor = colorWithAlpha(0xffffff, 0.7);
+        const separatorColor = colorWithAlpha(0xffffff, 0.4);
+        const centerY = o.y + o.height / 2;
+        let x = o.x + pad;
+
+        const separator = ' | ';
+        const separatorWidth = getTextWidth(separator, fontSize);
+        const gap = 3 * s;
+        const lines = this.getCpsLines();
 
         lines.forEach((l, index) => {
             drawText(`${l.label}:`, x, centerY, fontSize, labelColor, 17);
@@ -338,6 +423,7 @@ class HUD extends ModuleBase {
         try {
             NVG.beginFrame(sw, sh);
             if (this.STATS_HUD) this.drawStatsHud();
+            if (this.CPS_COUNTER) this.drawCpsCounter();
         } catch (e) {
             console.error('V5 Caught error' + e + e.stack);
         } finally {
