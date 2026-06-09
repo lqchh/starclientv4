@@ -8,6 +8,7 @@ import { Keybind } from '../../utils/player/Keybinding';
 import { Rotations } from '../../utils/player/Rotations';
 import { Raytrace } from '../../utils/Raytrace';
 import Render from '../../utils/render/Render';
+import { ScheduleTask } from '../../utils/ScheduleTask';
 import { Utils } from '../../utils/Utils';
 
 const FORAGING_STATS_FILE = 'foragingstats.json';
@@ -56,6 +57,11 @@ const BIG_TREE_MAX_VERTICAL_SPAN = 15;
 const AXE_THROW_INTERVAL_MS = 150;
 const ETHERWARP_WALK_MANA_THRESHOLD = 100;
 const UPWARP_PROTECTED_LOG_RADIUS = 1;
+const NEAREST_TREE_SCAN_COLUMNS = 900;
+const NEAREST_TREE_CANDIDATE_LIMIT = 4;
+const NEAREST_TREE_MIN_TRUNK_RUN = 3;
+const NEAREST_TREE_TRUNK_SEPARATION = 5;
+const DEBUG_RENDER_LOG_LIMIT = 320;
 const MINING_AIM_OFFSETS = [
     [0.5, 0.55, 0.5],
     [0.5, 0.35, 0.5],
@@ -114,6 +120,7 @@ class ForagingStatsCollector {
         this.isCollecting = false;
         this.checkedThisSession = false;
         this.visiblePointCache = new Map();
+        this.collectionCallback = null;
     }
     
     getCachedVisiblePoint(block) {
@@ -151,61 +158,81 @@ class ForagingStatsCollector {
         return this.normalizeStats(this.stats || {}, this.findBestAxe());
     }
 
-    refreshIfNeeded(refreshOnStart = true) {
+    refreshIfNeeded(refreshOnStart = true, onComplete = null) {
         if (!this.shouldRefresh(refreshOnStart)) {
             this.checkedThisSession = true;
             this.stats = this.normalizeStats(this.stats || {}, this.findBestAxe());
+            if (typeof onComplete === 'function') onComplete(this.stats, true);
             return true;
         }
-        return this.beginCollection();
+        return this.beginCollection(onComplete);
     }
 
-    beginCollection() {
-        if (this.isCollecting) return false;
+    beginCollection(onComplete = null) {
+        if (this.isCollecting) return true;
 
         const axe = this.findBestAxe();
         if (!axe) return false;
 
         this.isCollecting = true;
+        this.collectionCallback = typeof onComplete === 'function' ? onComplete : null;
+
+        let axeStats = {};
         try {
             this.setHeldSlotNow(axe.slot);
-            Thread.sleep(350);
-
-            const axeStats = this.parseAxeStats(axe.item);
+            axeStats = this.parseAxeStats(axe.item);
             ChatLib.command('stats');
-            if (!this.waitForGui('Your Equipment and Stats')) {
-                this.stats = this.normalizeStats(axeStats, axe);
-                this.saveStats(this.stats);
-                return false;
-            }
-
-            Thread.sleep(120);
-            const guiStats = this.parseStatsGui();
-            Guis.closeInv();
-
-            this.stats = this.normalizeStats({ ...axeStats, ...guiStats }, axe);
-            this.saveStats(this.stats);
+            ScheduleTask(1, () => this.pollStatsGui(axe, axeStats, 0));
             return true;
         } catch (e) {
             console.error('Foraging stats collection failed: ' + e + e.stack);
-            this.stats = this.normalizeStats({}, axe);
-            this.saveStats(this.stats);
+            this.completeCollection(axe, axeStats, false);
             return false;
-        } finally {
-            this.checkedThisSession = true;
-            this.isCollecting = false;
         }
     }
 
-    waitForGui(name, timeoutMs = 4000) {
-        let waited = 0;
-        while (waited < timeoutMs) {
+    pollStatsGui(axe, axeStats, waitedMs) {
+        if (!this.isCollecting) return;
+
+        try {
             const current = Guis.guiName();
-            if (current && current.includes(name)) return true;
-            Thread.sleep(50);
-            waited += 50;
+            if (current && current.includes('Your Equipment and Stats')) {
+                ScheduleTask(2, () => {
+                    if (!this.isCollecting) return;
+
+                    try {
+                        const guiStats = this.parseStatsGui();
+                        Guis.closeInv();
+                        this.completeCollection(axe, { ...axeStats, ...guiStats }, true);
+                    } catch (e) {
+                        console.error('Foraging stats collection failed: ' + e + e.stack);
+                        this.completeCollection(axe, axeStats, false);
+                    }
+                });
+                return;
+            }
+
+            if (waitedMs >= 4000) {
+                this.completeCollection(axe, axeStats, false);
+                return;
+            }
+
+            ScheduleTask(1, () => this.pollStatsGui(axe, axeStats, waitedMs + 50));
+        } catch (e) {
+            console.error('Foraging stats collection failed: ' + e + e.stack);
+            this.completeCollection(axe, axeStats, false);
         }
-        return false;
+    }
+
+    completeCollection(axe, rawStats, ok) {
+        this.stats = this.normalizeStats(rawStats || {}, axe);
+        this.saveStats(this.stats);
+        this.checkedThisSession = true;
+        this.isCollecting = false;
+
+        const callback = this.collectionCallback;
+        this.collectionCallback = null;
+        if (typeof callback === 'function') callback(this.stats, !!ok);
     }
 
     parseStatsGui() {
@@ -526,10 +553,14 @@ class ForagingBot extends ModuleBase {
         this.lastMineRescanAt = 0;
         this.needsFullScan = true;
         this.lastFullScanAt = 0;
+        this._scanOffsetCache = new Map();
+        this._nearestScanMisses = 0;
         this.blockCache = new Map();
         this.lastCacheClear = 0;
         this._remainingLogsCache = new Map();
         this._remainingLogsCacheTime = 0;
+        this._miningProbeCache = new Map();
+        this._miningProbeFrameKey = null;
         this._pruneCounter = 0;
         this._miningStallCount = -1;
         this._miningStallSince = 0;
@@ -700,13 +731,15 @@ class ForagingBot extends ModuleBase {
 
         const target = this.chooseBestTree(this.lastScanTrees);
         if (!target) {
+            this._nearestScanMisses++;
             this.needsFullScan = true;
             this.lastFullScanAt = 0;
-            this.status = 'No trunk found, rescanning';
-            this.transitionTo(STATES.SCANNING, this.status, 800);
+            this.status = 'No nearby trunk found, rescanning';
+            this.transitionTo(STATES.SCANNING, this.status, 180);
             return;
         }
 
+        this._nearestScanMisses = 0;
         this.currentTree = target;
         this.currentTargetBlock = null;
         this.clearUpwarpMiningLock();
@@ -778,7 +811,7 @@ class ForagingBot extends ModuleBase {
             this.transitionTo(STATES.MINING_UPPER, 'Upper trunk', 0);
         });
     }
-    
+
     clearBlockCache() {
         if (!this.lastCacheClear || Date.now() - this.lastCacheClear > 8000) {
             this.blockCache = new Map();
@@ -1001,7 +1034,7 @@ class ForagingBot extends ModuleBase {
 
     handleMining() {
         this.clearBlockCache();
-        this.invalidateRemainingCache();
+        this.beginMiningProbeFrame();
         if (!this.currentTree) {
             this.transitionTo(STATES.SCANNING, 'missing mining target');
             return;
@@ -1048,7 +1081,7 @@ class ForagingBot extends ModuleBase {
         if (!remaining.length) {
             if (!this._treeEngaged) {
                 const earlyLogs = this.getRemainingTreeLogs(tree);
-                if (this.shouldTryUpwarp(tree, earlyLogs) && this.tryStartUpwarp(tree, earlyLogs)) return;
+                if (this.tryStartUpwarp(tree, earlyLogs)) return;
                 this.blacklistCurrentTree(8000);
                 this.finishTreeAttempt('no logs at tree');
                 return;
@@ -1088,7 +1121,7 @@ class ForagingBot extends ModuleBase {
         const lockedToUpwarpBlock = this.isUpwarpMiningLocked(tree);
 
         if (!target && remaining.length) {
-            if (this.shouldTryUpwarp(tree, remaining) && this.tryStartUpwarp(tree, remaining)) return;
+            if (this.tryStartUpwarp(tree, remaining, picked)) return;
         }
 
         const aimPitch = target ? this.getBlockAimAngles(target).pitch : 0;
@@ -1096,7 +1129,7 @@ class ForagingBot extends ModuleBase {
         if (target && (aimPitch < -MAX_MINING_PITCH || playerPitch < -MAX_MINING_PITCH)) {
             if (!this._miningHighAimSince) this._miningHighAimSince = Date.now();
             else if (Date.now() - this._miningHighAimSince >= HIGH_AIM_UPWARP_MS) {
-                if (this.shouldTryUpwarp(tree, remaining) && this.tryStartUpwarp(tree, remaining)) return;
+                if (this.tryStartUpwarp(tree, remaining, picked)) return;
             }
         } else {
             this._miningHighAimSince = 0;
@@ -1107,7 +1140,7 @@ class ForagingBot extends ModuleBase {
         if (prevStallCount === remaining.length) {
             if (!this._miningStallSince) this._miningStallSince = Date.now();
             else if (Date.now() - this._miningStallSince >= stallLimit) {
-                if (this.shouldTryUpwarp(tree, remaining) && this.tryStartUpwarp(tree, remaining)) return;
+                if (this.tryStartUpwarp(tree, remaining, picked)) return;
                 this.finishTreeAttempt('mining stall');
                 return;
             }
@@ -1118,7 +1151,7 @@ class ForagingBot extends ModuleBase {
 
         if (!target) {
             this.updateMiningBreakProgress(remaining, false);
-            if (this.shouldTryUpwarp(tree, remaining) && this.tryStartUpwarp(tree, remaining)) return;
+            if (this.tryStartUpwarp(tree, remaining, picked)) return;
             this.finishTreeAttempt('mining stall');
             return;
         }
@@ -1131,16 +1164,17 @@ class ForagingBot extends ModuleBase {
             return;
         }
 
-        if (needsMove || (!lockedToUpwarpBlock && this.needsMiningMovement(target, tree))) {
+        const targetProbe = picked?.probe || this.getMiningProbe(target, tree);
+        if (needsMove || (!lockedToUpwarpBlock && (targetProbe?.needsMove ?? this.needsMiningMovement(target, tree)))) {
             needsMove = true;
-            useJump = useJump || this.needsJumpForBlock(target);
+            useJump = useJump || !!targetProbe?.needsJump;
         }
 
         this.miningJumpPhase = useJump;
         this.currentTargetBlock = target;
         const rawAimPoint = useJump
-            ? this.getJumpMiningAimPoint(target) || this.getMiningAimPoint(target)
-            : this.getMiningAimPoint(target);
+            ? targetProbe?.jumpAimPoint || targetProbe?.standingAimPoint || this.getJumpMiningAimPoint(target) || this.getMiningAimPoint(target)
+            : targetProbe?.standingAimPoint || this.getMiningAimPoint(target);
         const aimPoint = this.getSmoothedMiningAimPoint(target, rawAimPoint);
         let aimSettled = false;
 
@@ -1151,7 +1185,7 @@ class ForagingBot extends ModuleBase {
             this.resetMiningRotationTracking();
             this.blacklistMiningTarget(target);
             this.currentTargetBlock = null;
-            if (this.shouldTryUpwarp(tree, remaining) && this.tryStartUpwarp(tree, remaining)) return;
+            if (this.tryStartUpwarp(tree, remaining)) return;
             this.status = `Retargeting logs (${remaining.length})`;
             return;
         }
@@ -1172,7 +1206,7 @@ class ForagingBot extends ModuleBase {
                 this.currentTargetBlock = null;
                 this._miningNoAimTargetKey = null;
                 this._miningNoAimSince = 0;
-                if (this.shouldTryUpwarp(tree, remaining) && this.tryStartUpwarp(tree, remaining)) return;
+                if (this.tryStartUpwarp(tree, remaining)) return;
                 this.status = `Retargeting logs (${remaining.length})`;
                 return;
             }
@@ -1195,7 +1229,7 @@ class ForagingBot extends ModuleBase {
                 this._miningNoAimTargetKey = null;
                 this._miningNoAimSince = 0;
                 this.resetMiningRotationTracking();
-                if (this.shouldTryUpwarp(tree, remaining) && this.tryStartUpwarp(tree, remaining)) return;
+                if (this.tryStartUpwarp(tree, remaining)) return;
                 this.status = `Retargeting logs (${remaining.length})`;
                 return;
             }
@@ -1268,7 +1302,7 @@ class ForagingBot extends ModuleBase {
         Keybind.rightClick();
     }
 
-    shouldTryUpwarp(tree, remaining) {
+    shouldTryUpwarp(tree, remaining, picked = undefined) {
         if (!this.useUpwardEtherwarp || !this.useEtherwarpTravel || !remaining?.length) return false;
         if (this.isUpwarpMiningLocked(tree)) return false;
 
@@ -1276,15 +1310,15 @@ class ForagingBot extends ModuleBase {
         const upperLogs = remaining.filter((block) => block.y > playerY + 1);
         if (!upperLogs.length) return false;
 
-        const picked = this.pickMiningTarget(remaining, tree);
-        if (!picked || picked.needsMove) return true;
+        const targetPick = picked === undefined ? this.pickMiningTarget(remaining, tree) : picked;
+        if (!targetPick || targetPick.needsMove) return true;
 
         return remaining.length >= this.getMinLogsForUpwarp();
     }
 
-    tryStartUpwarp(tree, remaining) {
+    tryStartUpwarp(tree, remaining, picked = undefined) {
         const logs = remaining?.length ? remaining : this.getRemainingTreeLogs(tree);
-        if (!this.shouldTryUpwarp(tree, logs)) return false;
+        if (!this.shouldTryUpwarp(tree, logs, picked)) return false;
         const upwarp = this.travelPlanner.chooseUpwarpTravel(tree, logs);
         if (!upwarp) return false;
 
@@ -1312,7 +1346,7 @@ class ForagingBot extends ModuleBase {
         this.needsFullScan = true;
         this.lastFullScanAt = 0;
         this._approachRetryCount = 0;
-        this.transitionTo(STATES.COOLDOWN, reason, 30);
+        this.transitionTo(STATES.SCANNING, reason, 30);
     }
 
     recover() {
@@ -1348,9 +1382,89 @@ class ForagingBot extends ModuleBase {
         return trees;
     }
 
-    scanFigBlocks() {
-        this.clearBlockCache();
+    getNearestScanOffsets(radius) {
+        const r = Math.max(8, Math.floor(Number(radius) || this.scanRadius));
+        const cached = this._scanOffsetCache.get(r);
+        if (cached) return cached;
 
+        const offsets = [];
+        const radiusSq = r * r;
+        for (let dx = -r; dx <= r; dx++) {
+            for (let dz = -r; dz <= r; dz++) {
+                const distSq = dx * dx + dz * dz;
+                if (distSq > radiusSq) continue;
+                offsets.push({ dx, dz, distSq });
+            }
+        }
+
+        offsets.sort((a, b) => a.distSq - b.distSq);
+        this._scanOffsetCache.set(r, offsets);
+        return offsets;
+    }
+
+    findBestFigRunInColumn(x, z, yMin, yMax, distSq = 0) {
+        let currentStart = null;
+        let currentLength = 0;
+        let bestStart = null;
+        let bestLength = 0;
+
+        const finishRun = (endY) => {
+            if (currentStart == null || currentLength <= bestLength) return;
+            bestStart = currentStart;
+            bestLength = currentLength;
+        };
+
+        for (let y = yMin; y <= yMax; y++) {
+            if (this.isFigLogAt(x, y, z)) {
+                if (currentStart == null) currentStart = y;
+                currentLength++;
+                continue;
+            }
+
+            finishRun(y - 1);
+            currentStart = null;
+            currentLength = 0;
+        }
+        finishRun(yMax);
+
+        if (bestStart == null || bestLength < NEAREST_TREE_MIN_TRUNK_RUN) return null;
+
+        return {
+            x,
+            z,
+            minY: bestStart,
+            maxY: bestStart + bestLength - 1,
+            distSq,
+        };
+    }
+
+    collectFigBlocksNearTrunk(candidate, radius, out) {
+        if (!candidate) return;
+
+        const minY = candidate.minY - 2;
+        const maxY = candidate.maxY + 14;
+        for (let y = minY; y <= maxY; y++) {
+            for (let x = candidate.x - radius; x <= candidate.x + radius; x++) {
+                for (let z = candidate.z - radius; z <= candidate.z + radius; z++) {
+                    if (!this.isFigLogAt(x, y, z)) continue;
+                    const key = blockKey(x, y, z);
+                    if (!out.has(key)) out.set(key, { x, y, z });
+                }
+            }
+        }
+    }
+
+    isDistinctTrunkCandidate(candidate, candidates) {
+        if (!candidate) return false;
+        const minSepSq = NEAREST_TREE_TRUNK_SEPARATION * NEAREST_TREE_TRUNK_SEPARATION;
+        return !candidates.some((other) => {
+            const dx = candidate.x - other.x;
+            const dz = candidate.z - other.z;
+            return dx * dx + dz * dz <= minSepSq;
+        });
+    }
+
+    scanFigBlocks() {
         const playerX = Math.floor(Player.getX());
         const playerY = Math.floor(Player.getY());
         const playerZ = Math.floor(Player.getZ());
@@ -1358,30 +1472,37 @@ class ForagingBot extends ModuleBase {
         const radius = Math.max(8, Math.floor(this.scanRadius));
         const yRadius = SCAN_BATCH_Y_RADIUS;
         const yMin = playerY - 12;
+        const yMax = playerY + yRadius;
+        const offsets = this.getNearestScanOffsets(radius);
+        const candidates = [];
+        const baseBudget = Math.max(NEAREST_TREE_SCAN_COLUMNS, radius * 12);
+        const columnBudget = Math.min(offsets.length, baseBudget * Math.max(1, Math.min(4, this._nearestScanMisses + 1)));
 
-        const found = [];
+        const scanColumns = (start, end) => {
+            for (let i = start; i < end; i++) {
+                const offset = offsets[i];
+                const candidate = this.findBestFigRunInColumn(playerX + offset.dx, playerZ + offset.dz, yMin, yMax, offset.distSq);
+                if (!candidate) continue;
+                if (!this.isDistinctTrunkCandidate(candidate, candidates)) continue;
 
-        for (let x = playerX - radius; x <= playerX + radius; x++) {
-            for (let z = playerZ - radius; z <= playerZ + radius; z++) {
-                const dx = x - playerX;
-                const dz = z - playerZ;
-
-                if (dx * dx + dz * dz > radius * radius) continue;
-
-                for (let y = yMin; y <= playerY + yRadius; y++) {
-                    const block = this.getCachedBlock(x, y, z);
-                    const id = block?.type?.getID?.();
-
-                    if (id !== FIG_LOG_BLOCK_ID) continue;
-
-                    if (this.isFigLogBlock(block)) {
-                        found.push({ x, y, z });
-                    }
-                }
+                candidates.push(candidate);
+                if (candidates.length >= NEAREST_TREE_CANDIDATE_LIMIT) return true;
             }
+            return false;
+        };
+
+        scanColumns(0, columnBudget);
+        if (!candidates.length && columnBudget < offsets.length) {
+            scanColumns(columnBudget, Math.min(offsets.length, columnBudget * 2));
         }
 
-        return found;
+        candidates.sort((a, b) => a.distSq - b.distSq);
+        const found = new Map();
+        for (let i = 0; i < Math.min(candidates.length, NEAREST_TREE_CANDIDATE_LIMIT); i++) {
+            this.collectFigBlocksNearTrunk(candidates[i], TREE_LOG_RESCAN_RADIUS, found);
+        }
+
+        return Array.from(found.values());
     }
     isFigLogBlock(block) {
         if (!block || !block.type)
@@ -1612,6 +1733,8 @@ class ForagingBot extends ModuleBase {
     invalidateRemainingCache() {
         this._remainingLogsCache.clear();
         this._remainingLogsCacheTime = 0;
+        this._miningProbeCache.clear();
+        this._miningProbeFrameKey = null;
     }
 
     getMiningBlocks(tree) {
@@ -1681,6 +1804,78 @@ class ForagingBot extends ModuleBase {
         const eye = this.getPlayerEye();
         if (!eye) return null;
         return { x: eye.x, y: eye.y + JUMP_MINING_EYE_GAIN, z: eye.z };
+    }
+
+    beginMiningProbeFrame() {
+        const eye = this.getPlayerEye();
+        const key = eye
+            ? `${Math.round(eye.x * 20)},${Math.round(eye.y * 20)},${Math.round(eye.z * 20)}`
+            : 'no-eye';
+
+        if (this._miningProbeFrameKey === key) return;
+
+        this._miningProbeFrameKey = key;
+        this._miningProbeCache.clear();
+    }
+
+    getMiningProbe(block, tree = this.currentTree) {
+        if (!block) return null;
+
+        const key = `${treeKey(tree)}|${blockKey(block.x, block.y, block.z)}`;
+        const cached = this._miningProbeCache.get(key);
+        if (cached) return cached;
+
+        const exists = this.isFigLogAt(block.x, block.y, block.z);
+        const positionMove = tree?.trunk ? this.needsMiningPositionMove(block, tree) : true;
+        let standingAimPoint = null;
+        let jumpAimPoint = null;
+        let standingPitch = -Infinity;
+        let jumpPitch = -Infinity;
+        let canAimStanding = false;
+        let canAimJumping = false;
+
+        if (exists) {
+            standingAimPoint = this.getMiningAimPoint(block);
+            if (standingAimPoint) {
+                standingPitch = MathUtils.calculateAbsoluteAngles(standingAimPoint).pitch;
+                canAimStanding = standingPitch >= -MAX_MINING_PITCH;
+            }
+
+            if (!canAimStanding) {
+                jumpAimPoint = this.getJumpMiningAimPoint(block);
+                if (jumpAimPoint) {
+                    jumpPitch = MathUtils.calculateAbsoluteAngles(jumpAimPoint).pitch;
+                    canAimJumping = jumpPitch >= -MAX_JUMP_MINING_PITCH;
+                }
+            }
+        }
+
+        const needsJump = !canAimStanding && canAimJumping;
+        const selectedAimPoint = needsJump ? jumpAimPoint : standingAimPoint;
+        const selectedCanAim = needsJump ? canAimJumping : canAimStanding;
+        const reachableStanding = exists && this.isBlockReachableStanding(block);
+        const reachableJumping = exists && this.isBlockReachableJumping(block);
+        const needsMove = positionMove || !selectedCanAim;
+        const probe = {
+            exists,
+            standingAimPoint,
+            jumpAimPoint,
+            selectedAimPoint,
+            standingPitch,
+            jumpPitch,
+            canAimStanding,
+            canAimJumping,
+            reachableStanding,
+            reachableJumping,
+            needsJump,
+            positionMove,
+            needsMove,
+            canMineStanding: reachableStanding && !needsJump && canAimStanding && !needsMove,
+            canMineJumping: reachableJumping && needsJump && canAimJumping && !needsMove,
+        };
+
+        this._miningProbeCache.set(key, probe);
+        return probe;
     }
 
     getMiningAimPoint(block, eyeOverride = null) {
@@ -1836,47 +2031,32 @@ class ForagingBot extends ModuleBase {
     }
 
     getBlockAimAngles(block) {
-        return MathUtils.calculateAbsoluteAngles(this.getMiningAimPoint(block) || [block.x + 0.5, block.y + 0.55, block.z + 0.5]);
+        const aimPoint =
+            this.getMiningAimCoords(block?.hitPoint) ||
+            this.getMiningProbe(block)?.selectedAimPoint ||
+            this.getMiningAimPoint(block) ||
+            [block.x + 0.5, block.y + 0.55, block.z + 0.5];
+        return MathUtils.calculateAbsoluteAngles(aimPoint);
     }
 
     needsJumpForBlock(block) {
-        if (!block) return false;
-        const standingAimPoint = this.getMiningAimPoint(block);
-        if (standingAimPoint) {
-            const standingPitch = MathUtils.calculateAbsoluteAngles(standingAimPoint).pitch;
-            if (standingPitch >= -MAX_MINING_PITCH) return false;
-        }
-
-        const jumpAimPoint = this.getJumpMiningAimPoint(block);
-        if (!jumpAimPoint) return false;
-
-        const jumpPitch = MathUtils.calculateAbsoluteAngles(jumpAimPoint).pitch;
-        return jumpPitch >= -MAX_JUMP_MINING_PITCH;
+        return !!this.getMiningProbe(block)?.needsJump;
     }
 
     canAimBlockFromHere(block, forJump) {
-        const aimPoint = forJump ? this.getJumpMiningAimPoint(block) : this.getMiningAimPoint(block);
-        if (!aimPoint) return false;
-
-        const pitch = MathUtils.calculateAbsoluteAngles(aimPoint).pitch;
-        const minPitch = forJump ? -MAX_JUMP_MINING_PITCH : -MAX_MINING_PITCH;
-        return pitch >= minPitch;
+        const probe = this.getMiningProbe(block);
+        return forJump ? !!probe?.canAimJumping : !!probe?.canAimStanding;
     }
 
     canMineBlockInPlace(block, forJump = false) {
-        const reachable = forJump ? this.isBlockReachableJumping(block) : this.isBlockReachableStanding(block);
-        return reachable && this.canAimBlockFromHere(block, forJump);
+        const probe = this.getMiningProbe(block);
+        return forJump
+            ? !!probe?.reachableJumping && !!probe?.canAimJumping
+            : !!probe?.reachableStanding && !!probe?.canAimStanding;
     }
 
     needsMiningMovement(block, tree) {
-        if (!tree?.trunk) return true;
-
-        if (this.needsMiningPositionMove(block, tree)) return true;
-
-        const forJump = this.needsJumpForBlock(block);
-        if (!this.canAimBlockFromHere(block, forJump)) return true;
-
-        return false;
+        return this.getMiningProbe(block, tree)?.needsMove ?? true;
     }
 
     needsMiningPositionMove(block, tree) {
@@ -1888,21 +2068,11 @@ class ForagingBot extends ModuleBase {
     }
 
     canMineBlockStanding(block, tree) {
-        return (
-            this.isBlockReachableStanding(block) &&
-            !this.needsJumpForBlock(block) &&
-            this.canAimBlockFromHere(block, false) &&
-            !this.needsMiningMovement(block, tree)
-        );
+        return !!this.getMiningProbe(block, tree)?.canMineStanding;
     }
 
     canMineBlockJumping(block, tree) {
-        return (
-            this.isBlockReachableJumping(block) &&
-            this.needsJumpForBlock(block) &&
-            this.canAimBlockFromHere(block, true) &&
-            !this.needsMiningMovement(block, tree)
-        );
+        return !!this.getMiningProbe(block, tree)?.canMineJumping;
     }
 
     getMiningStandCoords(tree, block = null) {
@@ -2107,12 +2277,12 @@ class ForagingBot extends ModuleBase {
         return true;
     }
 
-    blockToTarget(block) {
+    blockToTarget(block, probe = null) {
         return {
             x: block.x,
             y: block.y,
             z: block.z,
-            hitPoint: this.getMiningAimPoint(block),
+            hitPoint: probe?.selectedAimPoint || probe?.standingAimPoint || this.getMiningAimPoint(block),
         };
     }
 
@@ -2125,10 +2295,11 @@ class ForagingBot extends ModuleBase {
             return distSq(a) - distSq(b);
         });
 
-        const wrap = (block, needsJump, needsMove) => ({
-            target: this.blockToTarget(block),
+        const wrap = (block, probe, needsJump = probe?.needsJump, needsMove = probe?.needsMove) => ({
+            target: this.blockToTarget(block, probe),
             needsJump: !!needsJump,
             needsMove: !!needsMove,
+            probe,
         });
 
         if (this.isUpwarpMiningLocked(tree)) {
@@ -2139,36 +2310,35 @@ class ForagingBot extends ModuleBase {
             const t = this.currentTargetBlock;
             const stillThere = sorted.some((b) => b.x === t.x && b.y === t.y && b.z === t.z);
             if (stillThere && this.isFigLogAt(t.x, t.y, t.z)) {
-                if (this.canMineBlockStanding(t, tree)) return wrap(t, false, false);
-                if (this.canMineBlockJumping(t, tree)) return wrap(t, true, false);
-                if (this.getMiningAimPoint(t) && this.isBlockReachable(t, 3.2)) return wrap(t, this.needsJumpForBlock(t), true);
-                if (this.needsMiningMovement(t, tree)) return wrap(t, this.needsJumpForBlock(t), true);
+                const probe = this.getMiningProbe(t, tree);
+                if (probe?.canMineStanding) return wrap(t, probe, false, false);
+                if (probe?.canMineJumping) return wrap(t, probe, true, false);
+                if (probe?.selectedAimPoint && this.isBlockReachable(t, 3.2)) return wrap(t, probe, probe.needsJump, true);
+                if (probe?.needsMove) return wrap(t, probe, probe.needsJump, true);
             }
         }
 
-        for (let i = 0; i < sorted.length; i++) {
-            const block = sorted[i];
-            if (this.canMineBlockStanding(block, tree)) return wrap(block, false, false);
-        }
+        let standing = null;
+        let jumping = null;
+        let reachableMove = null;
+        let positionMove = null;
 
         for (let i = 0; i < sorted.length; i++) {
             const block = sorted[i];
-            if (this.canMineBlockJumping(block, tree)) return wrap(block, true, false);
+            const probe = this.getMiningProbe(block, tree);
+            if (!probe?.exists) continue;
+
+            if (!standing && probe.canMineStanding) standing = wrap(block, probe, false, false);
+            if (!jumping && probe.canMineJumping) jumping = wrap(block, probe, true, false);
+            if (!reachableMove && this.isBlockReachable(block, 3.2) && (probe.selectedAimPoint || probe.positionMove)) {
+                reachableMove = wrap(block, probe, probe.needsJump, true);
+            }
+            if (!positionMove && probe.positionMove) positionMove = wrap(block, probe, probe.needsJump, true);
+
+            if (standing && jumping && reachableMove && positionMove) break;
         }
 
-        for (let i = 0; i < sorted.length; i++) {
-            const block = sorted[i];
-            if (!this.isBlockReachable(block, 3.2)) continue;
-            if (!this.getMiningAimPoint(block) && !this.needsMiningPositionMove(block, tree)) continue;
-            return wrap(block, this.needsJumpForBlock(block), true);
-        }
-
-        for (let i = 0; i < sorted.length; i++) {
-            const block = sorted[i];
-            if (this.needsMiningPositionMove(block, tree)) return wrap(block, this.needsJumpForBlock(block), true);
-        }
-
-        return null;
+        return standing || jumping || reachableMove || positionMove || null;
     }
 
     pickLockedUpwarpMiningTarget(sorted, wrap) {
@@ -2187,22 +2357,25 @@ class ForagingBot extends ModuleBase {
                 const t = this.currentTargetBlock;
                 const stillThere = candidates.some((b) => b.x === t.x && b.y === t.y && b.z === t.z);
                 if (stillThere && this.isFigLogAt(t.x, t.y, t.z)) {
-                    if (this.canMineBlockInPlace(t, false)) return wrap(t, false, false);
-                    if (this.canMineBlockInPlace(t, true)) return wrap(t, true, false);
+                    const probe = this.getMiningProbe(t, this.currentTree);
+                    if (probe?.reachableStanding && probe?.canAimStanding) return wrap(t, probe, false, false);
+                    if (probe?.reachableJumping && probe?.canAimJumping) return wrap(t, probe, true, false);
                 }
             }
 
+            let standing = null;
+            let jumping = null;
             for (let i = 0; i < candidates.length; i++) {
                 const block = candidates[i];
-                if (this.canMineBlockInPlace(block, false)) return wrap(block, false, false);
+                const probe = this.getMiningProbe(block, this.currentTree);
+                if (!probe?.exists) continue;
+
+                if (!standing && probe.reachableStanding && probe.canAimStanding) standing = wrap(block, probe, false, false);
+                if (!jumping && probe.reachableJumping && probe.canAimJumping) jumping = wrap(block, probe, true, false);
+                if (standing && jumping) break;
             }
 
-            for (let i = 0; i < candidates.length; i++) {
-                const block = candidates[i];
-                if (this.canMineBlockInPlace(block, true)) return wrap(block, true, false);
-            }
-
-            return null;
+            return standing || jumping || null;
         };
 
         return pickFrom(preferred) || pickFrom(protectedFallback);
@@ -2287,6 +2460,8 @@ class ForagingBot extends ModuleBase {
         this._miningBreakSince = 0;
         this._miningHighAimSince = 0;
         this._miningAimCache.clear();
+        this._miningProbeCache.clear();
+        this._miningProbeFrameKey = null;
         this.resetMiningAimSmoothing();
         this.resetMiningRotationTracking();
         this._miningNoAimTargetKey = null;
@@ -2494,6 +2669,7 @@ class ForagingBot extends ModuleBase {
         this.currentTravel = null;
         this.lastScanTrees = [];
         this.needsFullScan = true;
+        this._nearestScanMisses = 0;
         this.clearUpwarpMiningLock();
         this._approachRetryCount = 0;
         this.resetMiningStandRecovery();
@@ -2512,16 +2688,21 @@ class ForagingBot extends ModuleBase {
         this.pathToken++;
         this.nextScanAt = 0;
         this.needsFullScan = true;
+        this._nearestScanMisses = 0;
         this.blacklistedTrees.clear();
         this.blacklistedLandings.clear();
         this.clearUpwarpMiningLock();
         this._approachRetryCount = 0;
         this.resetMiningStandRecovery();
 
-        const ok = this.statsCollector.refreshIfNeeded(this.refreshStatsOnStart);
         this.stats = this.statsCollector.getStats();
+        const ok = this.statsCollector.refreshIfNeeded(this.refreshStatsOnStart, (stats, refreshed) => {
+            this.stats = stats;
+            if (!this.enabled) return;
+            if (!refreshed) this.message('&eUsing cached or conservative foraging stats fallback.');
+        });
         if (!ok) this.message('&eUsing conservative foraging stats fallback.');
-        this.transitionTo(STATES.SCANNING, 'Ready', 200);
+        this.transitionTo(STATES.SCANNING, this.statsCollector.isCollecting ? 'Ready, refreshing stats' : 'Ready', 200);
     }
 
     onDisable() {
@@ -2532,6 +2713,7 @@ class ForagingBot extends ModuleBase {
         this.currentTargetBlock = null;
         this.lastScanTrees = [];
         this.needsFullScan = true;
+        this._nearestScanMisses = 0;
         this.clearUpwarpMiningLock();
         this.state = STATES.WAITING;
         this.status = 'Disabled';
@@ -2547,18 +2729,26 @@ class ForagingBot extends ModuleBase {
     renderDebug() {
         if (!this.debug || !World.isLoaded()) return;
 
-        this.lastScanTrees.forEach((tree) => {
+        const trees = this.currentTree ? [this.currentTree] : this.lastScanTrees;
+        let renderedLogs = 0;
+
+        treeLoop:
+        for (let t = 0; t < trees.length; t++) {
+            const tree = trees[t];
             const isTarget = this.currentTree && treeKey(this.currentTree) === treeKey(tree);
             const trunkColor = isTarget ? Render.Color(80, 255, 140, 120) : Render.Color(255, 220, 70, 80);
             const branchColor = isTarget ? Render.Color(120, 200, 255, 90) : Render.Color(255, 180, 60, 60);
             const trunkSet = new Set((tree.trunkBlocks || []).map((b) => blockKey(b.x, b.y, b.z)));
             const logs = tree.logBlocks || tree.blocks || tree.trunkBlocks || [];
 
-            logs.forEach((block) => {
+            for (let i = 0; i < logs.length; i++) {
+                if (renderedLogs >= DEBUG_RENDER_LOG_LIMIT) break treeLoop;
+                const block = logs[i];
                 const color = trunkSet.has(blockKey(block.x, block.y, block.z)) ? trunkColor : branchColor;
                 Render.drawWireFrame(new Vec3d(block.x, block.y, block.z), color, 2, false);
-            });
-        });
+                renderedLogs++;
+            }
+        }
 
         const landing = this.currentTravel?.landing;
         if (landing) {
