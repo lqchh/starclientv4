@@ -71,7 +71,7 @@ class Beachballer extends ModuleBase {
                     title: 'Status',
                     data: {
                         State: () => this.getStateName(),
-                        Bounces: () => `${this.bounceCount}/40`,
+                        Bounces: () => `${this.bounceCount}/27`,
                         'Total Completed': () => this.getTotalBallsBounced(),
                     },
                 },
@@ -302,11 +302,11 @@ class Beachballer extends ModuleBase {
         const hasTrackedBall = this.trackedBall && !this.trackedBall.isDead();
         const hasRecentBounceUpdate = Date.now() - this.bounceTimer < 1500;
 
-        if (hasTrackedBall && this.bounceCount > 0 && this.bounceCount <= 40) {
+        if (hasTrackedBall && this.bounceCount > 0 && this.bounceCount <= 27) {
             this.hasActiveRun = true;
         }
 
-        if (this.bounceCount > 40) {
+        if (this.bounceCount > 27) {
             const validCompletion = hasTrackedBall && this.hasActiveRun && hasRecentBounceUpdate;
 
             if (validCompletion) {

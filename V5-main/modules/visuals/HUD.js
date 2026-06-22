@@ -16,13 +16,13 @@ class HUD extends ModuleBase {
             showEnabledToggle: false,
         });
 
-        this.STATS_HUD = true;
-        this.INVENTORY_HUD = true;
-        this.CPS_COUNTER = true;
+        this.STATS_HUD = false;
+        this.INVENTORY_HUD = false;
+        this.CPS_COUNTER = false;
 
-        this.addToggle('Stats Hud', (v) => (this.STATS_HUD = !!v), 'Shows FPS, TPS, Ping etc.', true);
-        this.addToggle('Inventory Hud', (v) => (this.INVENTORY_HUD = !!v), 'Turns on the inventory Hud', true);
-        this.addDirectToggle('CPS Counter', (v) => (this.CPS_COUNTER = !!v), 'Shows macro-generated left and right clicks per second.', true, 'HUD');
+        this.addToggle('Stats Hud', (v) => (this.STATS_HUD = !!v), 'Shows FPS, TPS, Ping etc.', false);
+        this.addToggle('Inventory Hud', (v) => (this.INVENTORY_HUD = !!v), 'Turns on the inventory Hud', false);
+        this.addDirectToggle('CPS Counter', (v) => (this.CPS_COUNTER = !!v), 'Shows macro-generated left and right clicks per second.', false, 'HUD');
 
         this.positionConfig = Utils.getConfigFile('OverlayPositions/hud_positions.json') || {};
         this.stats = this.loadOverlayState('stats', { x: 10, y: 10, scale: 1.0 });
@@ -76,7 +76,7 @@ class HUD extends ModuleBase {
     }
 
     syncFromOverlayEditor() {
-        const latest = Utils.getConfigFile('OverlayPositions/hud_positions.json');
+        const latest = OverlayManager?.hudSettings;
         if (!latest || typeof latest !== 'object') return;
 
         if (latest.stats && typeof latest.stats === 'object') {
@@ -400,6 +400,8 @@ class HUD extends ModuleBase {
         try {
             NVG.beginFrame(sw, sh);
             if (this.INVENTORY_HUD) this.drawInventoryHudBackground();
+            if (this.STATS_HUD) this.drawStatsHud();
+            if (this.CPS_COUNTER) this.drawCpsCounter();
         } catch (e) {
             console.error('V5 Caught error' + e + e.stack);
         } finally {
@@ -413,20 +415,6 @@ class HUD extends ModuleBase {
         if (this.INVENTORY_HUD) {
             try {
                 this.drawInventoryHudItems();
-            } catch (e) {
-                console.error('V5 Caught error' + e + e.stack);
-            }
-        }
-
-        try {
-            NVG.beginFrame(sw, sh);
-            if (this.STATS_HUD) this.drawStatsHud();
-            if (this.CPS_COUNTER) this.drawCpsCounter();
-        } catch (e) {
-            console.error('V5 Caught error' + e + e.stack);
-        } finally {
-            try {
-                NVG.endFrame();
             } catch (e) {
                 console.error('V5 Caught error' + e + e.stack);
             }

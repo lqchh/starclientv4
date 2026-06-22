@@ -17,7 +17,15 @@ class ProfileHider extends ModuleBase {
         this.addToggle('Custom Username', (v) => (this.HIDE_USERNAME = v), 'Allows for custom usernames', true);
         this.addTextInput('Username', ' ', (v) => (this.USERNAME = v), 'The username you want to use');
 
+        Mixin.delete('method_nameProcessor');
+    }
+
+    onEnable() {
         Mixin.setMethod('nameProcessor', (text) => this.getModifiedText(text));
+    }
+
+    onDisable() {
+        Mixin.delete('method_nameProcessor');
     }
 
     getModifiedText(originalTextComponent) {

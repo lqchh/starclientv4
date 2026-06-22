@@ -40,6 +40,15 @@ class HideonLeafESP extends ModuleBase {
         this.targets = World.getAllEntitiesOfType(ShulkerEntity).filter((entity) => entity && !entity.isDead());
     }
 
+    getTargets() {
+        if (this.enabled && World.isLoaded() && Utils.area() === 'Galatea') {
+            this.scanTargets();
+        }
+
+        this.targets = this.targets.filter((entity) => entity && !entity.isDead());
+        return this.targets.slice();
+    }
+
     renderTargets() {
         this.targets = this.targets.filter((entity) => entity && !entity.isDead());
 
@@ -54,4 +63,8 @@ class HideonLeafESP extends ModuleBase {
     }
 }
 
-new HideonLeafESP();
+export const HideonLeafESPModule = new HideonLeafESP();
+
+export function getHideonLeafTargets() {
+    return HideonLeafESPModule.getTargets();
+}

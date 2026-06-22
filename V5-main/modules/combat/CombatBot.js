@@ -9,6 +9,8 @@ import Render from '../../utils/render/Render';
 import { HumanizedCpsTimer } from '../../utils/TimeUtils';
 import PathConfig from '../../utils/pathfinder/PathConfig';
 
+const BP = net.minecraft.util.math.BlockPos;
+
 const BLACKHOLE_TEXTURES = new Set([
     'ewogICJ0aW1lc3RhbXAiIDogMTczNjE4NDg2Nzc3MywKICAicHJvZmlsZUlkIiA6ICJjNmViMzdjNmE4YjM0MDI3OGJjN2FmZGE3ZjMxOWJmMyIsCiAgInByb2ZpbGVOYW1lIiA6ICJFbFJleUNhbGFiYXphbCIsCiAgInNpZ25hdHVyZVJlcXVpcmVkIiA6IHRydWUsCiAgInRleHR1cmVzIiA6IHsKICAgICJTS0lOIiA6IHsKICAgICAgInVybCIgOiAiaHR0cDovL3RleHR1cmVzLm1pbmVjcmFmdC5uZXQvdGV4dHVyZS81NWI3MGYwOTRlMDE2Nzk1MDhkZDViY2EzOTY0MGVkOWVjNWM2YzY3OTJmYmQ4ZjU3YzAzYjNhMTJmOWMwYTkyIiwKICAgICAgIm1ldGFkYXRhIiA6IHsKICAgICAgICAibW9kZWwiIDogInNsaW0iCiAgICAgIH0KICAgIH0KICB9Cn0=',
     'ewogICJ0aW1lc3RhbXAiIDogMTczNjE4NDg1MjkxMCwKICAicHJvZmlsZUlkIiA6ICI5OWY1MzhjMDhlN2E0NTg3YmU4MGJjNGVmNzU0ZmQyMSIsCiAgInByb2ZpbGVOYW1lIiA6ICJTb2xvV1MyIiwKICAic2lnbmF0dXJlUmVxdWlyZWQiIDogdHJ1ZSwKICAidGV4dHVyZXMiIDogewogICAgIlNLSU4iIDogewogICAgICAidXJsIiA6ICJodHRwOi8vdGV4dHVyZXMubWluZWNyYWZ0Lm5ldC90ZXh0dXJlL2Q2MWI4N2YxYTEwNDBhOGI5MjJjYTUxYmU5YzBiYzZkNmZjNzFiYTVkNzQ1YzZiZjY1OWNiZDBkOWE5Y2Y0ZmMiLAogICAgICAibWV0YWRhdGEiIDogewogICAgICAgICJtb2RlbCIgOiAic2xpbSIKICAgICAgfQogICAgfQogIH0KfQ==',
@@ -29,6 +31,12 @@ const BLACKHOLE_MERGE_RADIUS = 2.5;
 
 const SEARCH_TARGET_TIMEOUT_MS = 15000;
 const TARGET_BLACKLIST_MS = 10000;
+const ENTITY_TARGET_SCAN_FPS = 5;
+const ENTITY_TARGET_CACHE_MS = 1000 / ENTITY_TARGET_SCAN_FPS;
+const COMBAT_GOAL_SCAN_RADIUS = 4;
+const COMBAT_GOAL_VERTICAL_SCAN = 3;
+const COMBAT_DIRECT_REPATH_MS = 750;
+const COMBAT_CLOSE_REPOSITION_RANGE = 2.8;
 const TARGET_SCORE = {
     DISTANCE_WEIGHT: 8,
     ANGLE_WEIGHT: 0.65,
@@ -46,6 +54,11 @@ const COMBAT_STATE = {
 };
 
 const COMBAT_PRESETS = {
+    Zombies: {
+        entityClass: ZombieEntity,
+        checkVisibility: true,
+        boundaryCheck: () => true,
+    },
     Graveyard: {
         entityClass: ZombieEntity,
         checkVisibility: true,
@@ -68,6 +81,17 @@ const COMBAT_PRESETS = {
     },
 };
 
+const CUSTOM_ENTITY_TARGETS = [
+    {
+        entityClass: ZombieEntity,
+        aliases: ['zombie'],
+    },
+    {
+        entityClass: EndermanEntity,
+        aliases: ['enderman', 'endermen'],
+    },
+];
+
 class Combat extends ModuleBase {
     constructor() {
         super({
@@ -88,6 +112,7 @@ class Combat extends ModuleBase {
 
         this.target = null;
         this.targets = [];
+        this.entityScanCache = new Map();
         this.blacklistedTargets = new Map();
         this.failedPathCallbacks = new Map();
 
@@ -114,6 +139,7 @@ class Combat extends ModuleBase {
         this.searchTarget = null;
         this.searchTargetSetTime = 0;
         this.pathRequestToken = 0;
+        this.lastDirectRepathAt = 0;
         this.strafeAngle = 0;
         this.strafeDirection = 1;
         this.lastStrafeTime = 0;
@@ -184,6 +210,8 @@ class Combat extends ModuleBase {
 
         this.on('postRenderWorld', () => this.renderTargets());
         this.on('tick', () => this.onTick());
+        this.on('step', () => this.scanEntityTargetCache()).setFps(ENTITY_TARGET_SCAN_FPS);
+        this.on('worldUnload', () => this.entityScanCache.clear());
     }
 
     renderTargets() {
@@ -354,6 +382,61 @@ class Combat extends ModuleBase {
             console.error('V5 Caught error' + e + e.stack);
         }
         return false;
+    }
+
+    scanEntityTargetCache() {
+        if (!this.enabled || !World.isLoaded()) {
+            this.entityScanCache.clear();
+            return;
+        }
+
+        this.getActiveEntityTargetClasses().forEach((entityClass) => this.refreshEntityTargetCache(entityClass));
+    }
+
+    getActiveEntityTargetClasses() {
+        const classes = [];
+
+        this.enabledPresets.forEach((presetName) => {
+            const entityClass = COMBAT_PRESETS[presetName]?.entityClass;
+            if (entityClass) classes.push(entityClass);
+        });
+
+        if (this.customTargetNames && this.customTargetNames.length > 0) {
+            this.getMatchingCustomEntityTargets(this.customTargetNames).forEach((targetType) => {
+                if (targetType.entityClass) classes.push(targetType.entityClass);
+            });
+        }
+
+        return classes.filter((entityClass, index) => classes.indexOf(entityClass) === index);
+    }
+
+    refreshEntityTargetCache(entityClass) {
+        try {
+            const entities = (World.getAllEntitiesOfType(entityClass) || []).filter((entity) => entity && !entity.isDead?.());
+            this.entityScanCache.set(entityClass, {
+                scannedAt: Date.now(),
+                entities,
+            });
+        } catch (e) {
+            console.error('V5 Caught error' + e + e.stack);
+            this.entityScanCache.set(entityClass, {
+                scannedAt: Date.now(),
+                entities: [],
+            });
+        }
+    }
+
+    getScannedEntitiesOfType(entityClass) {
+        const cached = this.entityScanCache.get(entityClass);
+        if (!cached || Date.now() - cached.scannedAt > ENTITY_TARGET_CACHE_MS * 2) {
+            this.refreshEntityTargetCache(entityClass);
+        }
+
+        const latest = this.entityScanCache.get(entityClass);
+        if (!latest || !Array.isArray(latest.entities)) return [];
+
+        latest.entities = latest.entities.filter((entity) => entity && !entity.isDead?.());
+        return latest.entities.slice();
     }
 
     isPositionSafe(x, y, z) {
@@ -552,6 +635,91 @@ class Combat extends ModuleBase {
         }
     }
 
+    getTargetAimPoint(target) {
+        const center = Raytrace.getEntityHitboxCenter(target);
+        if (center) return center;
+
+        const pos = this.getTargetPosition(target);
+        if (!pos) return null;
+        return { x: pos.x, y: pos.y + 1, z: pos.z };
+    }
+
+    canAttackTargetNow() {
+        if (!this.target) return false;
+        if (!PathConfig.COMBAT_STRICT_LINE_OF_SIGHT) return true;
+        return this.checkRaytraceVisibility(this.target);
+    }
+
+    hasDirectApproachLine(target) {
+        if (!target) return true;
+
+        const targetPos = this.getTargetPosition(target);
+        const targetAim = this.getTargetAimPoint(target);
+        if (!targetPos || !targetAim) return true;
+
+        const ignoreX = Math.floor(targetPos.x);
+        const ignoreY = Math.floor(targetPos.y);
+        const ignoreZ = Math.floor(targetPos.z);
+
+        try {
+            const torsoClear = Raytrace.isLineClear(
+                Player.getX(),
+                Player.getY() + 0.9,
+                Player.getZ(),
+                targetAim.x,
+                targetAim.y,
+                targetAim.z,
+                ignoreX,
+                ignoreY,
+                ignoreZ
+            );
+            if (!torsoClear) return false;
+
+            const feetClear = Raytrace.isLineClear(
+                Player.getX(),
+                Player.getY() + 0.25,
+                Player.getZ(),
+                targetPos.x,
+                targetPos.y + 0.25,
+                targetPos.z,
+                ignoreX,
+                ignoreY,
+                ignoreZ
+            );
+            return !!feetClear;
+        } catch (e) {
+            return true;
+        }
+    }
+
+    shouldPathToTarget(pos, distanceData) {
+        if (!distanceData) return false;
+        if (distanceData.distance > this.pathfindingThreshold) return true;
+        if (!this.target) return false;
+        return !this.hasDirectApproachLine(this.target);
+    }
+
+    repathToTarget(pos) {
+        const now = Date.now();
+        if (now - this.lastDirectRepathAt < COMBAT_DIRECT_REPATH_MS) return false;
+        this.lastDirectRepathAt = now;
+        this.startPathingToTarget(pos);
+        return true;
+    }
+
+    repositionAroundBlockedTarget(pos, distanceData) {
+        this.startRotationToTarget();
+
+        if (distanceData?.distanceFlat <= COMBAT_CLOSE_REPOSITION_RANGE) {
+            this.performStrafe(pos);
+            Keybind.setKey('sprint', true);
+            return;
+        }
+
+        Keybind.setKeysForStraightLineCoords(pos.x, pos.y, pos.z, true, true);
+        Keybind.setKey('sprint', true);
+    }
+
     stopCombat() {
         this.target = null;
         this.setState(COMBAT_STATE.IDLE, true);
@@ -610,8 +778,15 @@ class Combat extends ModuleBase {
     }
 
     handleIdleState(pos, distanceData) {
-        if (distanceData.distance > this.pathfindingThreshold) return this.startPathingToTarget(pos);
+        if (this.shouldPathToTarget(pos, distanceData)) {
+            if (!this.repathToTarget(pos)) this.repositionAroundBlockedTarget(pos, distanceData);
+            return;
+        }
         if (distanceData.distance > this.attackRange) return this.setState(COMBAT_STATE.APPROACHING);
+        if (!this.canAttackTargetNow()) {
+            if (!this.repathToTarget(pos)) this.repositionAroundBlockedTarget(pos, distanceData);
+            return;
+        }
         this.setState(COMBAT_STATE.ATTACKING);
     }
 
@@ -654,19 +829,23 @@ class Combat extends ModuleBase {
             }
         }
 
-        if (distanceData.distance <= this.attackRange) {
+        if (distanceData.distance <= this.attackRange && this.canAttackTargetNow()) {
             this.setState(COMBAT_STATE.ATTACKING);
         }
     }
 
     handleApproachingState(pos, distanceData) {
         if (distanceData.distance <= this.attackRange) {
-            this.setState(COMBAT_STATE.ATTACKING);
+            if (this.canAttackTargetNow()) {
+                this.setState(COMBAT_STATE.ATTACKING);
+            } else {
+                if (!this.repathToTarget(pos)) this.repositionAroundBlockedTarget(pos, distanceData);
+            }
             return;
         }
 
-        if (distanceData.distance > this.pathfindingThreshold) {
-            this.startPathingToTarget(pos);
+        if (this.shouldPathToTarget(pos, distanceData)) {
+            if (!this.repathToTarget(pos)) this.repositionAroundBlockedTarget(pos, distanceData);
             return;
         }
 
@@ -719,7 +898,7 @@ class Combat extends ModuleBase {
 
     handleAttackingState(pos, distanceData) {
         if (distanceData.distance > this.pathfindingThreshold) {
-            this.startPathingToTarget(pos);
+            if (!this.repathToTarget(pos)) this.repositionAroundBlockedTarget(pos, distanceData);
             return;
         }
 
@@ -728,8 +907,14 @@ class Combat extends ModuleBase {
             return;
         }
 
-        if (distanceData) this.tryAttack();
         this.startRotationToTarget();
+
+        if (this.canAttackTargetNow()) {
+            this.tryAttack();
+        } else {
+            if (!this.repathToTarget(pos)) this.repositionAroundBlockedTarget(pos, distanceData);
+            return;
+        }
 
         const optimalStrafeRange = 2.5;
         const strafeTolerance = 0.5;
@@ -782,19 +967,8 @@ class Combat extends ModuleBase {
             return;
         }
 
-        if (PathConfig.COMBAT_STRICT_LINE_OF_SIGHT && this.target) {
-            if (!this.checkRaytraceVisibility(this.target)) {
-                if (PathConfig.DEBUG_VISIBILITY_RAYTRACE) {
-                    console.log('[Combat] Skipping path to target behind wall');
-                }
-                this.target = null;
-                this.setState(COMBAT_STATE.IDLE);
-                return;
-            }
-        }
-
         const predictedPos = this.predictTargetPosition(this.target, 20);
-        const end = this.buildPathEndpoints(predictedPos || pos);
+        const end = this.buildCombatPathEndpoints(this.target, predictedPos || pos);
 
         this.lastPathTarget = { x: pos.x, y: pos.y, z: pos.z };
         this.isPathing = true;
@@ -824,7 +998,11 @@ class Combat extends ModuleBase {
             if (this.target && !this.isTargetInvalid(this.target)) {
                 const currentPos = this.getTargetPosition(this.target);
                 const distanceData = currentPos ? this.getDistanceToPlayer(currentPos) : null;
-                this.setState((distanceData?.distance ?? Infinity) <= this.attackRange ? COMBAT_STATE.ATTACKING : COMBAT_STATE.APPROACHING);
+                this.setState(
+                    (distanceData?.distance ?? Infinity) <= this.attackRange && this.canAttackTargetNow()
+                        ? COMBAT_STATE.ATTACKING
+                        : COMBAT_STATE.APPROACHING
+                );
             } else {
                 this.setState(COMBAT_STATE.IDLE);
             }
@@ -840,6 +1018,96 @@ class Combat extends ModuleBase {
             [x, y, z],
             [x, y + 1, z],
         ];
+    }
+
+    buildCombatPathEndpoints(target, pos) {
+        const targetPos = this.getTargetPosition(target) || pos;
+        if (!targetPos) return this.buildPathEndpoints(pos);
+
+        const targetAim = this.getTargetAimPoint(target) || { x: targetPos.x, y: targetPos.y + 1, z: targetPos.z };
+        const baseX = Math.floor(targetPos.x);
+        const baseY = Math.floor(targetPos.y) - 1;
+        const baseZ = Math.floor(targetPos.z);
+        const goals = [];
+
+        for (let dx = -COMBAT_GOAL_SCAN_RADIUS; dx <= COMBAT_GOAL_SCAN_RADIUS; dx++) {
+            for (let dz = -COMBAT_GOAL_SCAN_RADIUS; dz <= COMBAT_GOAL_SCAN_RADIUS; dz++) {
+                if (dx === 0 && dz === 0) continue;
+
+                const x = baseX + dx;
+                const z = baseZ + dz;
+                const flatToTarget = Math.hypot(x + 0.5 - targetPos.x, z + 0.5 - targetPos.z);
+                if (flatToTarget > this.attackRange - 0.2 || flatToTarget < 1.0) continue;
+
+                const support = this.resolveCombatGoalSupport(x, z, baseY);
+                if (!support) continue;
+
+                const feetY = support.y + 1;
+                if (!this.isPositionSafe(support.x + 0.5, feetY, support.z + 0.5)) continue;
+
+                const hasSight = this.hasAttackLineFromSupport(support, targetAim, targetPos);
+                const playerDistance = this.getDistanceToPlayer({ x: support.x + 0.5, y: feetY, z: support.z + 0.5 }).distance;
+                const idealRangePenalty = Math.abs(flatToTarget - Math.min(2.75, this.attackRange - 0.75)) * 2;
+                const heightPenalty = Math.abs(support.y - baseY) * 2.5;
+
+                goals.push({
+                    point: [support.x, support.y, support.z],
+                    score: playerDistance + idealRangePenalty + heightPenalty + (hasSight ? 0 : 12),
+                });
+            }
+        }
+
+        goals.sort((a, b) => a.score - b.score);
+        const attackGoals = this.dedupePathGoals(goals.map((goal) => goal.point)).slice(0, 16);
+        if (attackGoals.length > 0) return attackGoals;
+
+        return this.buildPathEndpoints(pos);
+    }
+
+    resolveCombatGoalSupport(x, z, preferredGroundY) {
+        const offsets = [0];
+        for (let offset = 1; offset <= COMBAT_GOAL_VERTICAL_SCAN; offset++) {
+            offsets.push(offset, -offset);
+        }
+
+        for (const offset of offsets) {
+            const y = preferredGroundY + offset;
+            if (Pathfinder.isWalkColumnValid(x, y, z)) return { x, y, z };
+        }
+
+        return null;
+    }
+
+    hasAttackLineFromSupport(support, targetAim, targetPos) {
+        try {
+            return Raytrace.isLineClear(
+                support.x + 0.5,
+                support.y + 2.62,
+                support.z + 0.5,
+                targetAim.x,
+                targetAim.y,
+                targetAim.z,
+                Math.floor(targetPos.x),
+                Math.floor(targetPos.y),
+                Math.floor(targetPos.z)
+            );
+        } catch (e) {
+            return false;
+        }
+    }
+
+    dedupePathGoals(points) {
+        const seen = new Set();
+        const out = [];
+
+        points.forEach((point) => {
+            const key = `${point[0]},${point[1]},${point[2]}`;
+            if (seen.has(key)) return;
+            seen.add(key);
+            out.push(point);
+        });
+
+        return out;
     }
 
     getTargetUuid(target) {
@@ -989,14 +1257,13 @@ class Combat extends ModuleBase {
             if (!config) return;
 
             if (config.entityClass) {
-                World.getAllEntitiesOfType(config.entityClass).forEach((entity) => {
+                this.getScannedEntitiesOfType(config.entityClass).forEach((entity) => {
                     try {
                         if (entity.isDead()) return;
                         const x = entity.getX();
                         const y = entity.getY();
                         const z = entity.getZ();
                         if (!config.boundaryCheck(x, y, z)) return;
-                        if (!this.isVisibleOrRecent(entity, config.checkVisibility)) return;
                         addMobIfSafe(entity);
                     } catch (e) {
                         console.error('V5 Caught error' + e + e.stack);
@@ -1015,6 +1282,7 @@ class Combat extends ModuleBase {
                 boundaryCheck: () => true,
             };
             this.findMob(customConfig).forEach(addMobIfSafe);
+            this.findEntitiesByTargetName(customConfig).forEach(addMobIfSafe);
         }
 
         return this.dedupeTargets(mobs);
@@ -1337,7 +1605,6 @@ class Combat extends ModuleBase {
                 if (!config.names.some((mobName) => lowerName.includes(String(mobName).toLowerCase()))) return;
                 if (config.excludeNames?.some((mobName) => lowerName.includes(String(mobName).toLowerCase()))) return;
                 if (player.isSpectator() || player.isInvisible() || player.isDead()) return;
-                if (!this.isVisibleOrRecent(player, config.checkVisibility)) return;
 
                 const x = player.getX();
                 const y = player.getY();
@@ -1351,6 +1618,47 @@ class Combat extends ModuleBase {
         });
 
         return mobs;
+    }
+
+    findEntitiesByTargetName(config, whitelist = null) {
+        if (!config || !Array.isArray(config.names) || config.names.length === 0) return [];
+
+        const matchingTypes = this.getMatchingCustomEntityTargets(config.names);
+
+        if (matchingTypes.length === 0) return [];
+
+        const mobs = [];
+
+        matchingTypes.forEach((targetType) => {
+            this.getScannedEntitiesOfType(targetType.entityClass).forEach((entity) => {
+                try {
+                    const uuid = entity.getUUID?.();
+                    if (whitelist && uuid && whitelist.has(uuid)) return;
+                    if (entity.isDead?.()) return;
+                    if (entity.isInvisible?.()) return;
+
+                    const x = entity.getX();
+                    const y = entity.getY();
+                    const z = entity.getZ();
+                    if (config.boundaryCheck && !config.boundaryCheck(x, y, z)) return;
+
+                    mobs.push(entity);
+                } catch (e) {
+                    console.error('V5 Caught error' + e + e.stack);
+                }
+            });
+        });
+
+        return mobs;
+    }
+
+    getMatchingCustomEntityTargets(names) {
+        if (!Array.isArray(names) || names.length === 0) return [];
+
+        const requestedNames = names.map((name) => String(name).toLowerCase());
+        return CUSTOM_ENTITY_TARGETS.filter((targetType) =>
+            targetType.aliases.some((alias) => requestedNames.some((name) => name.includes(alias)))
+        );
     }
 
     onEnable() {

@@ -24,43 +24,35 @@ class NukerUtilsClass {
     }
 
     registerTickHandler() {
-        this.tickRegister = register('tick', () => this.onTick()).unregister();
-        this.isTicking = false;
-    }
-
-    startTicking() {
-        if (this.isTicking) return;
-        this.tickRegister.register();
-        this.isTicking = true;
-    }
-
-    stopTickingIfIdle() {
-        if (!this.isTicking || this.nukeQueue.length > 0 || this.tickCounter > 0) return;
-        this.tickRegister.unregister();
-        this.isTicking = false;
-    }
-
-    onTick() {
-        if (this.nukeQueue.length > 0) {
-            this.processNextQueuedAction();
-        } else if (this.tickCounter > 0) {
-            this.tickCounter--;
-            Client.sendPacket(new HandSwingC2S(MCHand.MAIN_HAND));
-        }
-
-        this.stopTickingIfIdle();
+        register('tick', () => {
+            if (this.nukeQueue.length > 0) {
+                this.processNextQueuedAction();
+            } else if (this.tickCounter > 0) {
+                this.tickCounter--;
+                Client.sendPacket(new HandSwingC2S(MCHand.MAIN_HAND));
+            }
+        });
     }
 
     processNextQueuedAction() {
-        const nextAction = this.nukeQueue.pop();
+        // FIX 1: Use shift() (FIFO) instead of pop() (LIFO) so blocks are
+        // processed in the order they were added — critical when swimming
+        // past multiple sea creatures sequentially.
+        const nextAction = this.nukeQueue.shift();
         if (!nextAction || !Array.isArray(nextAction) || nextAction.length < 2) return;
+
         const blockCoords = nextAction[0];
         const ticksToWait = nextAction[1];
-        this.nukeQueue = [];
 
-        const blockPos = this.createBlockPosition(blockCoords);
+        // FIX 2: Removed nukeQueue = [] here. Clearing the entire queue on
+        // every dequeue was the main cause of dropped targets when multiple
+        // sea creatures were queued at once.
+
+        // FIX 3: Range check BEFORE processing (not after), so out-of-range
+        // entries are discarded quickly without wasting packet sends.
         if (!this.isBlockInRange(blockCoords)) return;
 
+        const blockPos = this.createBlockPosition(blockCoords);
         const facing = this.closestDirection(blockPos);
 
         this.sendBreakPackets(blockPos, facing);
@@ -74,23 +66,25 @@ class NukerUtilsClass {
 
     nukeQueueAdd(blockPos, ticks) {
         this.nukeQueue.push([blockPos, ticks]);
-        this.startTicking();
     }
 
-    // THIS IS DETECTED I THINK DONT USE IT IT RAPES YOU BRUTALLY
-    // TIMEDEO WILL COME TO YOU HOME ADDRESS
-    // AND FORCE HIS BIG BLACK 4 INCH COCK DOWN YOUR THROAT
     nuke(blockPos, ticks = 1) {
         if (!this.isBlockInRange(blockPos)) return;
 
         this.updateDelayIfNeeded(ticks);
         this.lastNukeTime = Date.now();
         this.tickCounter = ticks;
-        this.startTicking();
+
+        // FIX 4: Cap the delay so it never grows large enough to fire after
+        // you've already swum past a target. Clamp to MIN_NUKE_INTERVAL.
+        const clampedDelay = Math.min(this.delay, NukerUtilsClass.MIN_NUKE_INTERVAL);
 
         setTimeout(() => {
+            // FIX 5: Re-check range at execution time since we may have moved
+            // during the setTimeout window.
+            if (!this.isBlockInRange(blockPos)) return;
             this.executeNuke(blockPos);
-        }, this.delay);
+        }, clampedDelay);
 
         this.delay += NukerUtilsClass.SWING_DELAY;
     }

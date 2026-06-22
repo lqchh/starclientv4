@@ -28,7 +28,6 @@
         "GameRendererMixin",
         "FirmamentModAnnouncerMixin",
         "DrawContextCapture",
-        "GlStateManagerMixin",
         "FrustumInvoker",
         "WorldRendererMixin",
         "ScreenPanoramaMixin"

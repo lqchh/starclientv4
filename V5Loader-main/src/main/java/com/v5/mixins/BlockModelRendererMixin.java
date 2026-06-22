@@ -21,21 +21,26 @@ import java.util.List;
 @Mixin(BlockModelRenderer.class)
 public class BlockModelRendererMixin {
     @Unique
-    private final ThreadLocal<Integer> alphas = new ThreadLocal<>();
+    private final ThreadLocal<Integer> alphas = ThreadLocal.withInitial(() -> -1);
 
     @Inject(method = {"renderSmooth", "renderFlat"}, at = @At("HEAD"), cancellable = true)
     private void onRenderSmooth(BlockRenderView world, List<BlockModelPart> parts, BlockState state, BlockPos pos, MatrixStack matrices, VertexConsumer vertexConsumer, boolean cull, int overlay, CallbackInfo ci) {
-        if (Xray.isEnabled) {
-            int alpha = Xray.alpha;
-
-            if (alpha == 0) ci.cancel();
-            else alphas.set(alpha);
+        if (!Xray.isEnabled) {
+            alphas.set(-1);
+            return;
         }
+
+        int alpha = Xray.alpha;
+
+        if (alpha == 0) ci.cancel();
+        else alphas.set(alpha);
     }
 
     @ModifyArgs(method = "renderQuad", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/render/VertexConsumer;quad(Lnet/minecraft/client/util/math/MatrixStack$Entry;Lnet/minecraft/client/render/model/BakedQuad;[FFFFF[IIZ)V"))
     private void modifyXrayAlpha(final Args args) {
+        if (!Xray.isEnabled) return;
+
         final int alpha = alphas.get();
-        args.set(6, alpha == -1 ? args.get(6) : alpha / 255f);
+        if (alpha != -1) args.set(6, alpha / 255f);
     }
 }

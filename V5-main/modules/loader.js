@@ -5,6 +5,7 @@ import './mining/GlaciteCommissionMacro';
 import './mining/LobbyHopper';
 import './mining/Nuker';
 import './mining/OreMacro';
+import './mining/OreMacro';
 import './mining/PinglessMining';
 //import './mining/PowderMacro';
 //import './Mining/ScathaMacro';
@@ -13,6 +14,11 @@ import './mining/TunnelsMiner';
 
 /* COMBAT */
 import './combat/CombatBot';
+try {
+    require('./combat/MinerZombieShard');
+} catch (e) {
+    console.error('V5 failed to load optional combat module MinerZombieShard: ' + e + (e && e.stack ? e.stack : ''));
+}
 
 /* SLAYER */
 import './slayer/RevenantSlayer';
@@ -21,8 +27,10 @@ import './slayer/RevenantSlayer';
 import './foraging/AutoHarp';
 import './foraging/ForagingBot';
 import './foraging/HideonLeafESP';
+import './foraging/HideonLeafMacro';
 import './foraging/InvisibugESP';
 import './foraging/HuntingHelpers';
+import './foraging/SeaLumieESP';
 //import './foraging/SeaLumieMacro';
 
 /* FARMING */
@@ -73,6 +81,3 @@ import './other/VoidgloomHelper';
 import './other/AutoCombine';
 import './other/SunGeckoMacro';
 import './other/RatMacro';
-
-/* DUNGEONS */
-import './dungeons/DungeonUtils';
