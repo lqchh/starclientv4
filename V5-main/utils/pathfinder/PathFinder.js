@@ -116,7 +116,9 @@ class Finder {
         this.isFly = isFly;
         this.clearPathCaches();
 
-        const { points: starts, metadata: startMetadata } = this.createStartPoints(startPoints);
+        const { points: rawStarts, metadata: rawStartMetadata } = this.createStartPoints(startPoints);
+        const { points: starts, metadata: startMetadata } = this.randomizeStartAnchors(rawStarts, rawStartMetadata);
+        const searchEnds = this.randomizeGoalAnchors(end);
         if (!starts?.length) {
             this.finishFailure('No valid start points were provided.', true);
             return;
@@ -142,7 +144,7 @@ class Finder {
             Chat.messagePathfinder(`Path from &a${start[0]}, ${start[1]}, ${start[2]}&f to &c${endStr}`);
         }
 
-        if (!Swift.SwiftPath(starts, end, isFly, this.pathVariantSeed, PathConfig.PATHFINDER_MAX_COMPUTE)) {
+        if (!Swift.SwiftPath(starts, searchEnds, isFly, this.pathVariantSeed, PathConfig.PATHFINDER_MAX_COMPUTE)) {
             this.finishFailure(Swift.getLastError() || 'Failed to start', true);
             return;
         }
@@ -746,6 +748,42 @@ class Finder {
         return { points, metadata };
     }
 
+    randomizeStartAnchors(points, metadata) {
+        if (!Array.isArray(points) || points.length <= 1) {
+            return { points: points || [], metadata: metadata || [] };
+        }
+
+        const paired = points.map((point, index) => ({
+            point,
+            metadata: metadata?.[index] || {
+                type: 'unknown',
+                point: Array.isArray(point) ? [point[0], point[1], point[2]] : null,
+            },
+        }));
+
+        const shuffled = this.shuffleAnchors(paired);
+        return {
+            points: shuffled.map((entry) => entry.point),
+            metadata: shuffled.map((entry) => entry.metadata),
+        };
+    }
+
+    randomizeGoalAnchors(goals) {
+        if (!Array.isArray(goals) || goals.length <= 1) return goals || [];
+        return this.shuffleAnchors(goals.slice());
+    }
+
+    shuffleAnchors(items) {
+        const shuffled = Array.isArray(items) ? items.slice() : [];
+        for (let i = shuffled.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            const tmp = shuffled[i];
+            shuffled[i] = shuffled[j];
+            shuffled[j] = tmp;
+        }
+        return shuffled;
+    }
+
     getVariantWalkStart(playerPoint, seed = 0) {
         if (!Array.isArray(playerPoint) || playerPoint.length < 3 || !Number.isFinite(seed) || seed <= 0) {
             return null;
@@ -889,7 +927,8 @@ class Finder {
     createSplinePath(path) {
         if (!path) return null;
         const nodes = path.path_between_key_nodes?.length ? path.path_between_key_nodes : path.keynodes;
-        return nodes?.length ? Spline.generateSpline(nodes, 1) : null;
+        if (!nodes?.length) return null;
+        return this.isFly ? Spline.generateSpline(nodes, 1) : Spline.generateWalkSpline(nodes, 1);
     }
 
     getCachedWalkSplinePath(result) {

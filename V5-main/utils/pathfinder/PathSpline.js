@@ -20,6 +20,7 @@ class PathSpline {
         this.MIN_ADAPTIVE_TOLERANCE = 0.005;
         this.MAX_ADAPTIVE_SPACING = 15.0;
         this.Y_ADAPTIVE_SENSITIVITY = 1.5;
+        this.CATMULL_ROM_STEP = 0.35;
 
         this.lastDataHash = null;
         this.cachedBoxPositions = [];
@@ -113,6 +114,85 @@ class PathSpline {
         }
         finalPath.push(simplifiedPoints[simplifiedPoints.length - 1]);
         return finalPath;
+    }
+
+    generateWalkSpline(keyPathNodes, tolerance = 1) {
+        if (!keyPathNodes || keyPathNodes.length < 2) return [];
+
+        const rawPoints = keyPathNodes.map((n) => {
+            const x = n.x !== undefined ? n.x : n[0];
+            const y = n.y !== undefined ? n.y : n[1];
+            const z = n.z !== undefined ? n.z : n[2];
+            return new Vec3d(x, y, z);
+        });
+
+        const controlPoints = this.simplifySplineControlPoints(rawPoints, tolerance);
+        if (controlPoints.length < 3) return this.generateSpline(keyPathNodes, tolerance);
+
+        const finalPath = [];
+        for (let i = 0; i < controlPoints.length - 1; i++) {
+            const p0 = controlPoints[Math.max(0, i - 1)];
+            const p1 = controlPoints[i];
+            const p2 = controlPoints[i + 1];
+            const p3 = controlPoints[Math.min(controlPoints.length - 1, i + 2)];
+            const distance = Math.hypot(p2.x - p1.x, p2.y - p1.y, p2.z - p1.z);
+            const steps = Math.max(2, Math.ceil(distance / this.CATMULL_ROM_STEP));
+
+            for (let j = 0; j < steps; j++) {
+                if (i > 0 && j === 0) continue;
+                const t = j / steps;
+                finalPath.push(this.clampWalkSplinePoint(this.catmullRom(p0, p1, p2, p3, t), p1, p2));
+            }
+        }
+
+        finalPath.push(controlPoints[controlPoints.length - 1]);
+        return this.dedupeSplinePoints(finalPath);
+    }
+
+    simplifySplineControlPoints(rawPoints, tolerance) {
+        if (!rawPoints || rawPoints.length < 2) return rawPoints || [];
+
+        const simplifiedPoints = [rawPoints[0]];
+        for (let i = 1; i < rawPoints.length - 1; i++) {
+            const p0 = simplifiedPoints[simplifiedPoints.length - 1];
+            const p1 = rawPoints[i];
+            const dist = Math.hypot(p1.x - p0.x, p1.y - p0.y, p1.z - p0.z);
+            if (dist > tolerance) simplifiedPoints.push(p1);
+        }
+        simplifiedPoints.push(rawPoints[rawPoints.length - 1]);
+
+        return simplifiedPoints;
+    }
+
+    catmullRom(p0, p1, p2, p3, t) {
+        const t2 = t * t;
+        const t3 = t2 * t;
+        return new Vec3d(
+            0.5 * (2 * p1.x + (-p0.x + p2.x) * t + (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t2 + (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t3),
+            0.5 * (2 * p1.y + (-p0.y + p2.y) * t + (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t2 + (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t3),
+            0.5 * (2 * p1.z + (-p0.z + p2.z) * t + (2 * p0.z - 5 * p1.z + 4 * p2.z - p3.z) * t2 + (-p0.z + 3 * p1.z - 3 * p2.z + p3.z) * t3)
+        );
+    }
+
+    clampWalkSplinePoint(point, p1, p2) {
+        const minY = Math.min(p1.y, p2.y) - 0.35;
+        const maxY = Math.max(p1.y, p2.y) + 0.35;
+        return new Vec3d(point.x, Math.max(minY, Math.min(maxY, point.y)), point.z);
+    }
+
+    dedupeSplinePoints(points) {
+        if (!points || points.length === 0) return [];
+
+        const deduped = [points[0]];
+        for (let i = 1; i < points.length; i++) {
+            const prev = deduped[deduped.length - 1];
+            const curr = points[i];
+            if (Math.hypot(curr.x - prev.x, curr.y - prev.y, curr.z - prev.z) > 0.04) {
+                deduped.push(curr);
+            }
+        }
+
+        return deduped;
     }
 
     createLookPoints(smoothSplineData, minInterval = 1.2, maxInterval = 8) {

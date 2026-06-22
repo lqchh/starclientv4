@@ -26,6 +26,17 @@ class PathRotations {
         this.SMOOTH_FACTOR_STRAIGHT = 0.015;
         this.SMOOTH_FACTOR_TURN = 0.15;
         this.STRAIGHT_DEADZONE = 0.15;
+        this.REACTION_DELAY_MIN_MS = 55;
+        this.REACTION_DELAY_MAX_MS = 135;
+        this.REACTION_TURN_THRESHOLD = 8.0;
+        this.REACTION_COOLDOWN_MS = 320;
+        this.OVERSHOOT_TURN_THRESHOLD = 13.0;
+        this.OVERSHOOT_MAX_YAW = 3.5;
+        this.OVERSHOOT_MAX_PITCH = 1.7;
+        this.NOISE_YAW_STDDEV = 0.09;
+        this.NOISE_PITCH_STDDEV = 0.06;
+        this.NOISE_SMOOTHING = 0.88;
+        this.NOISE_FADE_ERROR = 2.2;
 
         this.resetRotations();
 
@@ -37,7 +48,8 @@ class PathRotations {
             }
             this.updateLookPoint();
             this.applyHumanizedPhysics();
-            PathRotationsUtility.applyRotationWithGCD(this.currentYaw, this.currentPitch);
+            const output = this.getOutputRotation();
+            PathRotationsUtility.applyRotationWithGCD(output.yaw, output.pitch);
         });
     }
 
@@ -55,7 +67,153 @@ class PathRotations {
         this.currentPitch = 0;
         this.rawTargetYaw = 0;
         this.rawTargetPitch = 0;
+        this.pendingReactionTarget = null;
+        this.reactionDelayUntil = 0;
+        this.lastReactionAt = 0;
+        this.bezierTurn = null;
+        this.overshoot = null;
+        this.noiseYaw = 0;
+        this.noisePitch = 0;
+        this.lastRotationError = 0;
         PathRotationsUtility.stopRotation();
+    }
+
+    clamp(value, min, max) {
+        return Math.max(min, Math.min(max, value));
+    }
+
+    randomBetween(min, max) {
+        return min + Math.random() * (max - min);
+    }
+
+    gaussianRandom() {
+        let u = 0;
+        let v = 0;
+        while (u === 0) u = Math.random();
+        while (v === 0) v = Math.random();
+        return Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
+    }
+
+    bezierEase(progress) {
+        const t = this.clamp(progress, 0, 1);
+        const inv = 1 - t;
+        const p1 = 0.18;
+        const p2 = 0.82;
+        return 3 * inv * inv * t * p1 + 3 * inv * t * t * p2 + t * t * t;
+    }
+
+    getTurnDistance(fromYaw, fromPitch, toYaw, toPitch) {
+        return Math.hypot(MathUtils.getAngleDifference(fromYaw, toYaw), toPitch - fromPitch);
+    }
+
+    shouldDelayTurn(turnDistance, now) {
+        if (turnDistance < this.REACTION_TURN_THRESHOLD) return false;
+        if (now - this.lastReactionAt < this.REACTION_COOLDOWN_MS) return false;
+        return this.currentPathCurvatureDeg > 8.0 || turnDistance >= this.REACTION_TURN_THRESHOLD * 1.8;
+    }
+
+    beginBezierTurn(targetYaw, targetPitch, now, initialDistance = null) {
+        const distance = Number.isFinite(initialDistance) ? initialDistance : this.getTurnDistance(this.currentYaw, this.currentPitch, targetYaw, targetPitch);
+        if (distance < this.REACTION_TURN_THRESHOLD * 0.7) return;
+        this.bezierTurn = {
+            targetYaw,
+            targetPitch,
+            startedAt: now,
+            durationMs: this.clamp(120 + distance * 8, 145, 480),
+            initialDistance: distance,
+        };
+    }
+
+    getBezierTurnScale(targetYaw, targetPitch, now) {
+        if (!this.bezierTurn) return 1.0;
+        const targetShift = this.getTurnDistance(this.bezierTurn.targetYaw, this.bezierTurn.targetPitch, targetYaw, targetPitch);
+        if (targetShift > Math.max(4.0, this.bezierTurn.initialDistance * 0.25)) {
+            this.beginBezierTurn(targetYaw, targetPitch, now);
+        }
+        if (!this.bezierTurn) return 1.0;
+        const progress = (now - this.bezierTurn.startedAt) / this.bezierTurn.durationMs;
+        if (progress >= 1) {
+            this.bezierTurn = null;
+            return 1.0;
+        }
+        return 0.24 + this.bezierEase(progress) * 1.0;
+    }
+
+    beginOvershoot(targetYaw, targetPitch, turnDistance, now) {
+        if (turnDistance < this.OVERSHOOT_TURN_THRESHOLD) return;
+        const yawDelta = MathUtils.getAngleDifference(this.currentYaw, targetYaw);
+        const pitchDelta = targetPitch - this.currentPitch;
+        const absYawDelta = Math.abs(yawDelta);
+        const absPitchDelta = Math.abs(pitchDelta);
+        const strength = this.randomBetween(0.7, 1.2);
+        this.overshoot = {
+            yaw: absYawDelta > 0.5 ? (Math.sign(yawDelta) || 1) * Math.min(this.OVERSHOOT_MAX_YAW, Math.max(0.3, absYawDelta * 0.07)) * strength : 0,
+            pitch: absPitchDelta > 0.35 ? (Math.sign(pitchDelta) || 0) * Math.min(this.OVERSHOOT_MAX_PITCH, Math.max(0.14, absPitchDelta * 0.06)) * strength : 0,
+            startedAt: now,
+            durationMs: this.randomBetween(220, 380),
+        };
+    }
+
+    getOvershootOffset(now) {
+        if (!this.overshoot) return { yaw: 0, pitch: 0 };
+        const progress = (now - this.overshoot.startedAt) / this.overshoot.durationMs;
+        if (progress >= 1) {
+            this.overshoot = null;
+            return { yaw: 0, pitch: 0 };
+        }
+        const envelope = Math.sin(Math.PI * this.clamp(progress, 0, 1));
+        return {
+            yaw: this.overshoot.yaw * envelope,
+            pitch: this.overshoot.pitch * envelope,
+        };
+    }
+
+    updateHumanizedTarget(targetYaw, targetPitch, alpha) {
+        const now = Date.now();
+        if (this.reactionDelayUntil > now) {
+            this.pendingReactionTarget = { yaw: targetYaw, pitch: targetPitch };
+            return;
+        }
+        if (this.pendingReactionTarget) {
+            targetYaw = this.pendingReactionTarget.yaw;
+            targetPitch = this.pendingReactionTarget.pitch;
+            this.pendingReactionTarget = null;
+        }
+
+        const yawDelta = MathUtils.getAngleDifference(this.rawTargetYaw, targetYaw);
+        const pitchDelta = targetPitch - this.rawTargetPitch;
+        const turnDistance = Math.hypot(yawDelta, pitchDelta);
+
+        if (this.shouldDelayTurn(turnDistance, now)) {
+            this.reactionDelayUntil = now + this.randomBetween(this.REACTION_DELAY_MIN_MS, this.REACTION_DELAY_MAX_MS);
+            this.pendingReactionTarget = { yaw: targetYaw, pitch: targetPitch };
+            this.lastReactionAt = now;
+            return;
+        }
+
+        if (turnDistance >= this.REACTION_TURN_THRESHOLD && !this.bezierTurn) this.beginBezierTurn(targetYaw, targetPitch, now, turnDistance);
+        const easedAlpha = Math.min(1.0, alpha * this.getBezierTurnScale(targetYaw, targetPitch, now));
+
+        if (Math.abs(yawDelta) > this.YAW_DEADZONE) {
+            this.rawTargetYaw = MathUtils.wrapTo180(this.rawTargetYaw + yawDelta * easedAlpha);
+        }
+        if (Math.abs(pitchDelta) > this.PITCH_DEADZONE) {
+            this.rawTargetPitch += pitchDelta * easedAlpha;
+        }
+
+        if (turnDistance >= this.OVERSHOOT_TURN_THRESHOLD && !this.overshoot) this.beginOvershoot(targetYaw, targetPitch, turnDistance, now);
+    }
+
+    getOutputRotation() {
+        const fade = this.complete ? 0 : this.clamp(this.lastRotationError / this.NOISE_FADE_ERROR, 0, 1);
+        const keep = this.NOISE_SMOOTHING;
+        const drive = Math.sqrt(1 - keep * keep);
+        this.noiseYaw = this.noiseYaw * keep + this.gaussianRandom() * this.NOISE_YAW_STDDEV * drive;
+        this.noisePitch = this.noisePitch * keep + this.gaussianRandom() * this.NOISE_PITCH_STDDEV * drive;
+        return {
+            yaw: MathUtils.wrapTo180(this.currentYaw + this.noiseYaw * fade),
+            pitch: this.clamp(this.currentPitch + this.noisePitch * fade, -90, 90),
+        };
     }
 
     isPointVisible(playerEyes, targetPoint) {
@@ -253,10 +411,11 @@ class PathRotations {
         const yawDelta = MathUtils.getAngleDifference(this.rawTargetYaw, desiredYaw);
         let alpha = this.currentPathCurvatureDeg < 4.0 ? this.SMOOTH_FACTOR_STRAIGHT : this.SMOOTH_FACTOR_TURN;
         if (Math.abs(yawDelta) < 2.0) alpha *= 0.5;
-        if (!(this.currentPathCurvatureDeg < 4.0 && Math.abs(yawDelta) < this.STRAIGHT_DEADZONE)) {
-            this.rawTargetYaw = MathUtils.wrapTo180(this.rawTargetYaw + yawDelta * alpha);
+        if (this.currentPathCurvatureDeg < 4.0 && Math.abs(yawDelta) < this.STRAIGHT_DEADZONE) {
+            this.updateHumanizedTarget(this.rawTargetYaw, angles.pitch, alpha);
+        } else {
+            this.updateHumanizedTarget(desiredYaw, angles.pitch, alpha);
         }
-        this.rawTargetPitch = this.rawTargetPitch + (angles.pitch - this.rawTargetPitch) * alpha;
         const lastPoint = this.lookPoints[this.lookPoints.length - 1];
         if (this.currentPathPosition >= this.lookPoints.length - 1.2 || this.isWithinArrivalThreshold(playerEyes, lastPoint)) {
             if (this.isWithinFinalThreshold(playerEyes, lastPoint)) {
@@ -267,9 +426,15 @@ class PathRotations {
     }
 
     applyHumanizedPhysics() {
+        const now = Date.now();
+        const overshootOffset = this.getOvershootOffset(now);
+        const effectiveTargetYaw = MathUtils.wrapTo180(this.rawTargetYaw + overshootOffset.yaw);
+        const effectiveTargetPitch = this.clamp(this.rawTargetPitch + overshootOffset.pitch, -90, 90);
+        const stepScale = this.clamp(PathExecutor.getStepDeltaSeconds() * 120, 0.5, 2.5);
+
         this.currentYaw = MathUtils.wrapTo180(this.currentYaw);
-        const yawError = MathUtils.getAngleDifference(this.currentYaw, this.rawTargetYaw);
-        const pitchError = this.rawTargetPitch - this.currentPitch;
+        const yawError = MathUtils.getAngleDifference(this.currentYaw, effectiveTargetYaw);
+        const pitchError = effectiveTargetPitch - this.currentPitch;
         const world = World.getWorld();
         const bp = new BP(Math.floor(Player.getX()), Math.floor(Player.getY() + 1), Math.floor(Player.getZ()));
         let isNarrow = false;
@@ -297,26 +462,27 @@ class PathRotations {
         const dynamicKD = isNarrow ? this.KD * 1.6 : isStraight ? this.KD * 1.2 : this.KD;
         const dynamicAccel = isNarrow ? this.ACCEL_LIMIT * 0.65 : isStraight ? this.ACCEL_LIMIT * 0.8 : this.ACCEL_LIMIT;
         if (Math.abs(yawError) < this.SETTLE_THRESHOLD && Math.abs(this.yawVelocity) < 0.05) {
-            this.currentYaw = this.rawTargetYaw;
+            this.currentYaw = effectiveTargetYaw;
             this.yawVelocity = 0;
         } else {
             let desiredYawAccel = yawError * this.BASE_KP - this.yawVelocity * dynamicKD;
             desiredYawAccel = Math.max(-dynamicAccel, Math.min(dynamicAccel, desiredYawAccel));
-            this.yawVelocity = (this.yawVelocity + desiredYawAccel) * friction;
+            this.yawVelocity = (this.yawVelocity + desiredYawAccel * stepScale) * Math.pow(friction, stepScale);
             this.yawVelocity = Math.max(-this.MAX_VELOCITY, Math.min(this.MAX_VELOCITY, this.yawVelocity));
-            this.currentYaw += this.yawVelocity;
+            this.currentYaw += this.yawVelocity * stepScale;
         }
         if (Math.abs(pitchError) < this.SETTLE_THRESHOLD && Math.abs(this.pitchVelocity) < 0.05) {
-            this.currentPitch = this.rawTargetPitch;
+            this.currentPitch = effectiveTargetPitch;
             this.pitchVelocity = 0;
         } else {
             let desiredPitchAccel = pitchError * this.BASE_KP - this.pitchVelocity * this.KD;
             desiredPitchAccel = Math.max(-this.ACCEL_LIMIT, Math.min(this.ACCEL_LIMIT, desiredPitchAccel));
-            this.pitchVelocity = (this.pitchVelocity + desiredPitchAccel) * friction;
+            this.pitchVelocity = (this.pitchVelocity + desiredPitchAccel * stepScale) * Math.pow(friction, stepScale);
             this.pitchVelocity = Math.max(-this.MAX_VELOCITY, Math.min(this.MAX_VELOCITY, this.pitchVelocity));
-            this.currentPitch += this.pitchVelocity;
+            this.currentPitch += this.pitchVelocity * stepScale;
         }
         this.currentPitch = Math.max(-90, Math.min(90, this.currentPitch));
+        this.lastRotationError = Math.hypot(MathUtils.getAngleDifference(this.currentYaw, this.rawTargetYaw), this.rawTargetPitch - this.currentPitch);
     }
 
     beginFlyRotations(preGeneratedLookPoints) {
